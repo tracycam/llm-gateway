@@ -1,7 +1,7 @@
-import path from 'node:path';
-import { controlHeaders, isAuthorized, requireTokenConfig, sessionRoute } from '../server/auth';
-import { VOL1_DIR, WEB_DIST_DIR as DEFAULT_WEB_DIST_DIR } from '../server/config';
-import { serveAppWebAsset } from '../server/apps/common';
+import { controlHeaders } from '../server/auth';
+import { isAuthorized, requireTokenConfig, sessionRoute } from './adminAuth';
+import { DATA_DIR, LEGACY_DATA_DIR, LISTEN, PORT, WEB_DIST_DIR } from './config';
+import { serveWebAsset } from './webAssets';
 import { errorResponse, jsonResponse } from './http';
 import { handleAnthropicMessages } from './anthropicAdapter';
 import { Cluster } from './cluster';
@@ -11,8 +11,6 @@ import { handleNodeRoute, NODES_PATH } from './nodeRoutes';
 import { NodeStore } from './nodeStore';
 import { GatewayKeyRecord, GatewayStore } from './store';
 
-const PORT = Number.parseInt(process.env.AIHUB_GATEWAY_PORT ?? '8000', 10);
-const LISTEN = process.env.AIHUB_GATEWAY_LISTEN ?? '127.0.0.1';
 requireTokenConfig(LISTEN);
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -20,10 +18,7 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-api-key, anthropic-version',
 };
 const CONTROL_URL = process.env.AIHUB_CONTROL_URL ?? 'http://127.0.0.1:4310';
-const DATA_DIR = process.env.AIHUB_GATEWAY_DATA_DIR ?? path.join(VOL1_DIR, 'gateway');
-const WEB_DIST_DIR = process.env.AIHUB_WEB_DIST_DIR ?? DEFAULT_WEB_DIST_DIR;
-
-migrateGatewayDataDir(DATA_DIR, path.join(VOL1_DIR, 'apps', 'app-gateway'));
+migrateGatewayDataDir(DATA_DIR, LEGACY_DATA_DIR);
 const store = new GatewayStore(DATA_DIR);
 const nodeStore = new NodeStore(DATA_DIR);
 const timing = (name: string): number | undefined => {
@@ -402,7 +397,7 @@ const server = Bun.serve({
     }
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      const asset = serveAppWebAsset(pathname, 'gateway.html', WEB_DIST_DIR);
+      const asset = serveWebAsset(pathname, 'gateway.html', WEB_DIST_DIR);
       if (asset) return asset;
     }
 
