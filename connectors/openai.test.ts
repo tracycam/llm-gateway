@@ -152,10 +152,17 @@ test('missing and malformed credentials reject both operations', async () => {
   await expect(openaiCompatible.models(provider(base, '{}'))).rejects.toBeInstanceOf(UpstreamFailure);
 });
 
+// Where a Chat client's request lands, for the connectors whose base is not a Chat root.
+const CHAT_CLIENT_PATH: Record<string, string> = {
+  anthropic: '/v1/messages',
+  opencode: '/openai/v1/chat/completions',
+  'opencode-go': '/openai/v1/chat/completions',
+};
+
 for (const connector of CONNECTORS) {
   test(`${connector.id} target uses the overridden URL`, async () => {
     const base = stub(() => Response.json({ data: [] }));
-    const path = connector.id === 'anthropic' ? '/v1/messages' : '/chat/completions';
+    const path = CHAT_CLIENT_PATH[connector.id] ?? '/chat/completions';
     expect((await connector.target(provider(`${base}/`), 'm', 'chat')).url).toBe(`${base}${path}`);
   });
   test(`${connector.id} target sends its authentication header`, async () => {

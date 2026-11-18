@@ -13,8 +13,12 @@ const metadata = [
   ['anthropic', 'https://api.anthropic.com', 'api-key'],
   ['openrouter', 'https://openrouter.ai/api/v1', 'api-key'],
   ['xai', 'https://api.x.ai/v1', 'api-key'],
+  ['opencode', 'https://opencode.ai/inference', 'api-key'],
+  ['opencode-go', 'https://opencode.ai/inference/go', 'api-key'],
   ['openai-compatible', null, 'optional-api-key'],
 ] as const;
+
+const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'api-key', 'cookie'];
 
 for (const [id, base, credential] of metadata) {
   test(`${id} exposes its default base`, () => {
@@ -32,6 +36,14 @@ test('registry preserves connector order and rejects unknown ids', () => {
 
 test('connector ids are unique', () => {
   expect(new Set(CONNECTORS.map((connector) => connector.id)).size).toBe(CONNECTORS.length);
+});
+
+test('no connector asks the client for a credential header', () => {
+  for (const connector of CONNECTORS) {
+    for (const name of connector.clientHeaders ?? []) {
+      expect(CREDENTIAL_HEADERS).not.toContain(name.toLowerCase());
+    }
+  }
 });
 
 test('connectorById returns the registered connector', () => {
