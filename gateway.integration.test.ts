@@ -585,3 +585,33 @@ test('13. a Responses client is passed through to an upstream that speaks Respon
   expect(row.cacheReadTokens).toBe(4);
   expect(row.outputTokens).toBe(6);
 }, 20_000);
+
+test('14. the real registry lists seven connectors and holds two login providers without a key', async () => {
+  const listed = await adminJson<{
+    connectors: Array<{ id: string; credential: string; defaultBaseUrl: string | null }>;
+  }>('/api/gateway/connectors');
+  expect(listed.connectors.map((connector) => connector.id)).toEqual([
+    'openai-compatible', 'anthropic-compatible', 'grok', 'opencode', 'opencode-go', 'copilot',
+    'openrouter',
+  ]);
+  expect(listed.connectors.filter((connector) => connector.credential === 'login')
+    .map((connector) => [connector.id, connector.defaultBaseUrl])).toEqual([
+    ['grok', 'https://cli-chat-proxy.grok.com/v1'],
+    ['copilot', 'https://api.githubcopilot.com'],
+  ]);
+
+  for (const connector of ['grok', 'copilot']) {
+    const created = await admin('/api/gateway/providers', 'POST', {
+      name: `login ${connector}`, connector,
+    });
+    expect([connector, created.status]).toEqual([connector, 201]);
+    const { provider } = JSON.parse(created.text) as {
+      provider: { id: string; hasCredential: boolean };
+    };
+    expect(provider.hasCredential).toBe(false);
+    // Signing in is the administrator's next step. Asking where it stands must not start it, and
+    // no POST to /login is sent here: it would reach the connector's real authorization server.
+    expect(await adminJson(`/api/gateway/providers/${provider.id}/login`))
+      .toEqual({ login: { state: 'none' } });
+  }
+}, 20_000);

@@ -33,11 +33,6 @@ function usdPerTokenText(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? Number((number * 1_000_000).toPrecision(9)) : null;
 }
 
-/** USD cents per 100M tokens to USD per 1M tokens; docs/gateway-connectors.md §5. */
-function centsPer100M(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value / 10_000 : null;
-}
-
 function openaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
   return {
     contextLength: positiveNumber(item.context_length) ?? positiveNumber(item.context_window)
@@ -58,19 +53,6 @@ function openrouterModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId
       input: usdPerTokenText(pricing.prompt),
       output: usdPerTokenText(pricing.completion),
       cacheRead: usdPerTokenText(pricing.input_cache_read),
-    },
-    protocols: null,
-  };
-}
-
-function xaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
-  return {
-    contextLength: positiveNumber(item.context_length),
-    maxOutputTokens: null,
-    price: {
-      input: centsPer100M(item.prompt_text_token_price),
-      output: centsPer100M(item.completion_text_token_price),
-      cacheRead: centsPer100M(item.cached_prompt_text_token_price),
     },
     protocols: null,
   };
@@ -118,20 +100,14 @@ export const openrouter = connector({
   responses: false,
   model: openrouterModel,
 });
-/** xAI's OpenAI-compatible API: Chat Completions and Responses. */
-export const xai = connector({
-  id: 'xai',
-  name: 'xAI',
-  defaultBaseUrl: 'https://api.x.ai/v1',
-  keyRequired: true,
-  responses: true,
-  model: xaiModel,
-});
 /**
  * The OpenAI API and every server that speaks its Chat Completions protocol. The address is the
  * official one until the administrator gives another; the key is optional because a server on
  * the local network may need none, and no key means no `Authorization` header at all. The
  * Responses API is served at `/responses` when the administrator's server has it.
+ *
+ * An xAI API key is a provider of this kind at `https://api.x.ai/v1`; only the per-model price
+ * discovery the retired `xai` connector did is lost with it.
  */
 export const openaiCompatible = connector({
   id: 'openai-compatible',

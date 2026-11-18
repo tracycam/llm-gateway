@@ -1,12 +1,14 @@
 // Registry of available upstream connectors.
 import type { Connector } from './connector';
 import { anthropicCompatible } from './anthropic';
-import { openaiCompatible, openrouter, xai } from './openai';
+import { copilot } from './copilot';
+import { grok } from './grok';
+import { openaiCompatible, openrouter } from './openai';
 import { opencode, opencodeGo } from './opencode';
 
-/** Connectors in administrator-facing order. */
+/** Connectors in the order the owner lists them where a provider is added. */
 export const CONNECTORS: readonly Connector[] = [
-  openaiCompatible, anthropicCompatible, xai, opencode, opencodeGo, openrouter,
+  openaiCompatible, anthropicCompatible, grok, opencode, opencodeGo, copilot, openrouter,
 ];
 
 /** Find a connector by its stable identifier. */

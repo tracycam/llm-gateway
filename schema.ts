@@ -166,7 +166,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 7) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 8) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -287,6 +287,20 @@ export function migrate(db: Database): void {
       db.exec(`
         ALTER TABLE provider_models ADD COLUMN protocols TEXT;
         PRAGMA user_version = 7;
+      `);
+    })();
+  }
+
+  // Version 8 retires the API-key `xai` connector: its providers become OpenAI-compatible ones
+  // at the address they already reached. A stored base_url wins, so a provider pointed at a
+  // proxy stays there; its key, discovered models, prices and routes are untouched.
+  if (version < 8) {
+    db.transaction(() => {
+      db.exec(`
+        UPDATE providers SET connector = 'openai-compatible',
+          base_url = COALESCE(base_url, 'https://api.x.ai/v1')
+          WHERE connector = 'xai';
+        PRAGMA user_version = 8;
       `);
     })();
   }

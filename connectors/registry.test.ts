@@ -11,9 +11,10 @@ afterEach(() => { server.stop(true); });
 const metadata = [
   ['openai-compatible', 'https://api.openai.com/v1', 'optional-api-key'],
   ['anthropic-compatible', 'https://api.anthropic.com', 'optional-api-key'],
-  ['xai', 'https://api.x.ai/v1', 'api-key'],
+  ['grok', 'https://cli-chat-proxy.grok.com/v1', 'login'],
   ['opencode', 'https://opencode.ai/inference', 'api-key'],
   ['opencode-go', 'https://opencode.ai/inference/go', 'api-key'],
+  ['copilot', 'https://api.githubcopilot.com', 'login'],
   ['openrouter', 'https://openrouter.ai/api/v1', 'api-key'],
 ] as const;
 
@@ -52,6 +53,17 @@ test('connectorById returns the registered connector', () => {
 test('the retired connector ids are not registered', () => {
   expect(connectorById('openai')).toBeNull();
   expect(connectorById('anthropic')).toBeNull();
+  // The API-key xAI connector is retired; an xAI key is an openai-compatible provider now.
+  expect(connectorById('xai')).toBeNull();
+});
+
+test('only a login connector can sign a provider in', () => {
+  const login = CONNECTORS.filter((connector) => connector.credential === 'login');
+  expect(login.map((connector) => connector.id)).toEqual(['grok', 'copilot']);
+  for (const connector of login) expect(connector.login).toBeDefined();
+  for (const connector of CONNECTORS) {
+    if (connector.credential !== 'login') expect(connector.login).toBeUndefined();
+  }
 });
 
 test('connectorById returns null for a missing id', () => {

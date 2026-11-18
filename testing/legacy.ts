@@ -115,6 +115,17 @@ export function openVersion6Database(): Database {
   return db;
 }
 
+/**
+ * An empty in-memory version-7 database: the version-6 schema with the per-model protocols
+ * column version 7 adds.
+ */
+export function openVersion7Database(): Database {
+  const db = openVersion6Database();
+  db.exec(`ALTER TABLE provider_models ADD COLUMN protocols TEXT;
+    PRAGMA user_version = 7`);
+  return db;
+}
+
 /** Writes the version-2 database under `dataDir`; returns the token its API key was created with. */
 export function writeLegacyDatabase(dataDir: string, token = LEGACY_TOKEN): string {
   const db = openGatewayDatabase(dataDir);

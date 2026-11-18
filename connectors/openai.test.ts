@@ -2,7 +2,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import type { ProviderAccess } from './connector';
 import { UpstreamFailure } from './connector';
-import { openaiCompatible, openrouter, xai } from './openai';
+import { openaiCompatible, openrouter } from './openai';
 import { anthropicCompatible } from './anthropic';
 import { CONNECTORS } from './registry';
 
@@ -56,14 +56,6 @@ test('a Responses client goes to the Responses route of openai-compatible', asyn
   const base = stub(() => Response.json({ data: [] }));
   expect(await openaiCompatible.target(provider(base), 'm', 'responses')).toEqual({
     url: `${base}/responses`,
-    headers: { Authorization: 'Bearer secret-key' },
-    protocol: 'responses',
-  });
-});
-
-test('a Responses client goes to the Responses route of xAI', async () => {
-  expect(await xai.target(provider(null), 'm', 'responses')).toEqual({
-    url: 'https://api.x.ai/v1/responses',
     headers: { Authorization: 'Bearer secret-key' },
     protocol: 'responses',
   });
@@ -157,20 +149,6 @@ test('OpenRouter converts per-token prices, including free, dynamic and invalid 
   expect(models[1]?.price).toEqual({ input: null, output: null, cacheRead: null });
 });
 
-test('xAI converts cents per 100 million tokens and leaves missing prices unknown', async () => {
-  const base = stub(() => Response.json({ data: [
-    { id: 'grok', context_length: 131072, prompt_text_token_price: 20000,
-      completion_text_token_price: 50000, cached_prompt_text_token_price: 5000 },
-    { id: 'unknown', prompt_text_token_price: null },
-  ] }));
-  const models = await xai.models(provider(base));
-  expect(models[0]).toEqual({
-    upstreamId: 'grok', contextLength: 131072, maxOutputTokens: null,
-    price: { input: 2, output: 5, cacheRead: 0.5 }, protocols: null,
-  });
-  expect(models[1]?.price.input).toBeNull();
-});
-
 test('401 carries upstream message and status without leaking the credential', async () => {
   const base = stub(() => Response.json({ error: { message: 'denied' } }, { status: 401 }));
   try {
@@ -235,7 +213,10 @@ const CHAT_CLIENT_PATH: Record<string, string> = {
   'opencode-go': '/openai/v1/chat/completions',
 };
 
-for (const connector of CONNECTORS) {
+// The API-key connectors; a login connector's target needs a signed-in credential.
+const KEY_CONNECTORS = CONNECTORS.filter((connector) => connector.credential !== 'login');
+
+for (const connector of KEY_CONNECTORS) {
   test(`${connector.id} target uses the overridden URL`, async () => {
     const base = stub(() => Response.json({ data: [] }));
     const path = CHAT_CLIENT_PATH[connector.id] ?? '/chat/completions';
@@ -268,18 +249,6 @@ for (const [text, expected] of [
   });
 }
 
-test('xAI 20000 cents per 100M converts to 2 USD per 1M', async () => {
-  const base = stub(() => Response.json({ data: [{ id: 'grok', prompt_text_token_price: 20000 }] }));
-  expect((await xai.models(provider(base)))[0]?.price.input).toBe(2);
-});
-
-test('xAI missing prices are unknown', async () => {
-  const base = stub(() => Response.json({ data: [{ id: 'grok' }] }));
-  const price = (await xai.models(provider(base)))[0]!.price;
-  expect(price.input).toBeNull();
-  expect(price.cacheRead).toBeNull();
-});
-
 test('vLLM max_model_len is the context length', async () => {
   const base = stub(() => Response.json({ data: [{ id: 'vllm', max_model_len: 32768 }] }));
   expect((await openaiCompatible.models(provider(base)))[0]?.contextLength).toBe(32768);
@@ -296,7 +265,7 @@ test('OpenRouter per-token prices are rounded to exact-looking USD per million',
   expect(price.cacheRead).toBe(0.05);
 });
 
-for (const connector of [openaiCompatible, openrouter, xai, anthropicCompatible]) {
+for (const connector of [openaiCompatible, openrouter, anthropicCompatible]) {
   test(`${connector.id} skips entries without a string id`, async () => {
     const base = stub(() => Response.json({ data: [{ id: 'valid' }, { id: 7 }, {}, null], has_more: false }));
     expect((await connector.models(provider(base))).map((model) => model.upstreamId)).toEqual(['valid']);
@@ -377,7 +346,7 @@ for (const connector of [openaiCompatible, anthropicCompatible]) {
   });
 }
 
-for (const connector of [openaiCompatible, openrouter, xai]) {
+for (const connector of [openaiCompatible, openrouter]) {
   test(`${connector.id} does not say which protocols its models speak`, async () => {
     const base = stub(() => Response.json({ data: [{ id: 'model' }] }));
     expect((await connector.models(provider(base)))[0]?.protocols).toBeNull();

@@ -193,7 +193,7 @@ function registryFixture(): { db: Database; deps: AdminDeps } {
   return { db, deps: { ...deps, connector: connectorById, connectors: () => CONNECTORS } };
 }
 
-test('GET connectors lists the six API-key connectors in administrator order', async () => {
+test('GET connectors lists the seven connectors in administrator order', async () => {
   const { deps, db } = registryFixture();
   try {
     const response = await handleProviderRoute(request('/connectors'), deps);
@@ -202,11 +202,14 @@ test('GET connectors lists the six API-key connectors in administrator order', a
         defaultBaseUrl: 'https://api.openai.com/v1', credential: 'optional-api-key' },
       { id: 'anthropic-compatible', name: 'Anthropic-compatible',
         defaultBaseUrl: 'https://api.anthropic.com', credential: 'optional-api-key' },
-      { id: 'xai', name: 'xAI', defaultBaseUrl: 'https://api.x.ai/v1', credential: 'api-key' },
+      { id: 'grok', name: 'Grok',
+        defaultBaseUrl: 'https://cli-chat-proxy.grok.com/v1', credential: 'login' },
       { id: 'opencode', name: 'OpenCode Zen',
         defaultBaseUrl: 'https://opencode.ai/inference', credential: 'api-key' },
       { id: 'opencode-go', name: 'OpenCode Go',
         defaultBaseUrl: 'https://opencode.ai/inference/go', credential: 'api-key' },
+      { id: 'copilot', name: 'GitHub Copilot',
+        defaultBaseUrl: 'https://api.githubcopilot.com', credential: 'login' },
       { id: 'openrouter', name: 'OpenRouter',
         defaultBaseUrl: 'https://openrouter.ai/api/v1', credential: 'api-key' },
     ] });

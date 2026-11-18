@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createApp, GATEWAY_IDLE_TIMEOUT, queueDeadline, type GatewayApp } from './app';
 import { issueCookie } from './adminAuth';
 import type { Connector } from './connectors/connector';
+import { CONNECTORS, connectorById } from './connectors/registry';
 import { openGatewayDatabase } from './database';
 import { MAX_QUEUE_WAIT_MS } from './inference/handler';
 import { KeyStore } from './keyStore';
@@ -531,5 +532,43 @@ test('closing the app ends the connection to a registered node', async () => {
     expect(daemon.identityRequests).toHaveLength(handshakes);
   } finally {
     await daemon.stop();
+  }
+});
+
+test('the real registry adds either login provider, and signing in is refused before any call', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-registry-'));
+  dirs.push(dir);
+  // The connectors' authorization addresses are constants; the app's fetch is the only place a
+  // test can stop them, so it refuses and records what would have been asked.
+  const attempts: string[] = [];
+  const refusing = Object.assign(
+    async (input: string | URL | Request): Promise<Response> => {
+      attempts.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      throw new Error('no network in a test');
+    },
+    { preconnect: () => undefined },
+  ) as unknown as typeof fetch;
+  const app = createApp({
+    db: openGatewayDatabase(dir), webDistDir: path.join(dir, 'web'), fetch: refusing,
+    now: () => NOW, connector: connectorById, connectors: () => CONNECTORS, adminToken: ADMIN,
+  });
+  apps.push(app);
+  const call = (pathname: string, init: RequestInit = {}) => app.handle(
+    new Request(`http://gateway${pathname}`, { ...init, headers: { ...ADMIN_HEADER, ...init.headers } }),
+  );
+  const loginConnectors = [
+    ['grok', 'https://auth.x.ai/oauth2/device/code'],
+    ['copilot', 'https://github.com/login/device/code'],
+  ] as const;
+  for (const [connector, deviceEndpoint] of loginConnectors) {
+    const created = await call('/api/gateway/providers', post({ name: `login ${connector}`, connector }));
+    expect([connector, created.status]).toEqual([connector, 201]);
+    const { provider } = await created.json() as { provider: { id: string; hasCredential: boolean } };
+    expect(provider.hasCredential).toBe(false);
+    expect(await (await call(`/api/gateway/providers/${provider.id}/login`)).json())
+      .toEqual({ login: { state: 'none' } });
+    const started = await call(`/api/gateway/providers/${provider.id}/login`, { method: 'POST' });
+    expect([connector, started.status]).toEqual([connector, 502]);
+    expect([connector, attempts.at(-1)]).toEqual([connector, deviceEndpoint]);
   }
 });
