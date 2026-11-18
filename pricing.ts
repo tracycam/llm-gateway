@@ -1,15 +1,14 @@
+import type { Price } from '../protocol/gatewayApi';
+
+// `Price` crosses the management API; protocol/gatewayApi.ts defines it once and this module
+// re-exports it under its current name.
+export type { Price };
+
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-}
-
-export interface Price {
-  input: number | null;
-  output: number | null;
-  cacheRead: number | null;
-  cacheWrite: number | null;
 }
 
 export function costOf(usage: Usage | null, price: Price): number | null {

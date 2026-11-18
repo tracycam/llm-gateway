@@ -1,44 +1,26 @@
 import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import { StoreRefusal } from './schema';
-import type { Price } from './pricing';
+import type { ProviderPatchBody, ProviderRecord, ProviderModel } from '../protocol/gatewayApi';
 
-export interface ProviderRecord {
-  id: string;
-  name: string;
-  connector: string;
-  baseUrl: string | null;
-  enabled: boolean;
-  autoPublish: boolean;
-  hasCredential: boolean;
-  createdAt: string;
-}
+// `ProviderRecord` and `ProviderModel` cross the management API; protocol/gatewayApi.ts defines
+// them once.
+export type { ProviderRecord, ProviderModel };
 
 /** A model as its provider describes it. Null is "the provider did not say". */
-export interface ProviderModel {
-  upstreamId: string;
-  contextLength: number | null;
-  /** The longest answer the model gives. */
-  maxOutputTokens: number | null;
-  /** USD per 1M tokens. */
-  price: Price;
-  fetchedAt: string;
-}
-
 export type ProviderModelInput = Omit<ProviderModel, 'fetchedAt'>;
+
+/** What the store writes for a new provider: the API's body plus the credential as stored. */
 export interface ProviderInput {
   name: string;
   connector: string;
   baseUrl: string | null;
+  /** The credential as the gateway stores it, a JSON text only the connector reads. */
   credential: string | null;
   autoPublish: boolean;
 }
-export interface ProviderPatch {
-  name?: string;
-  baseUrl?: string | null;
-  enabled?: boolean;
-  autoPublish?: boolean;
-}
+/** The fields of a provider a patch may change; the credential has its own setter. */
+export type ProviderPatch = Pick<ProviderPatchBody, 'name' | 'baseUrl' | 'enabled' | 'autoPublish'>;
 interface ProviderRow {
   id: string;
   name: string;

@@ -3,7 +3,11 @@
 // headers and in which protocol, and which models the provider offers. It does not parse
 // streams, count usage or choose routes.
 import type { Protocol } from '../protocols/protocol';
+import type { CredentialKind } from '../../protocol/gatewayApi';
 import type { ProviderModelInput } from '../providerStore';
+
+// `CredentialKind` crosses the management API; protocol/gatewayApi.ts defines it once.
+export type { CredentialKind };
 
 /** A provider as its connector sees it. */
 export interface ProviderAccess {
@@ -15,7 +19,7 @@ export interface ProviderAccess {
   /** Replaces the stored credential, for example after a login token was renewed. */
   saveCredential(credential: string): void;
   /** What the provider said about one of its models when they were last listed. */
-  model(upstreamModel: string): DiscoveredModel | null;
+  model(upstreamModel: string): ProviderModelInput | null;
 }
 
 /** Where one request goes. */
@@ -26,18 +30,6 @@ export interface UpstreamTarget {
   /** The protocol this upstream model speaks at that URL. */
   protocol: Protocol;
 }
-
-/** A model as its provider describes it. */
-export type DiscoveredModel = ProviderModelInput;
-
-/** How the administrator gives a provider its credential. */
-export type CredentialKind =
-  /** An API key, required. */
-  | 'api-key'
-  /** An API key, optional (a local server may want none). */
-  | 'optional-api-key'
-  /** A login the gateway carries out and renews itself. */
-  | 'login';
 
 export interface Connector {
   /** Stored with the provider; never changes once released. */
@@ -59,7 +51,7 @@ export interface Connector {
    */
   target(provider: ProviderAccess, upstreamModel: string, inbound: Protocol): Promise<UpstreamTarget>;
   /** The models the provider offers now. Rejects when the provider cannot be asked. */
-  models(provider: ProviderAccess): Promise<DiscoveredModel[]>;
+  models(provider: ProviderAccess): Promise<ProviderModelInput[]>;
 }
 
 /** A failure of the upstream that a connector reports in words fit to show. */

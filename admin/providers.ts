@@ -1,8 +1,20 @@
 // Provider and connector management routes.
+import type {
+  ConnectorInfo,
+  ConnectorsResponse,
+  DiscoveredModel,
+  ProviderListItem,
+  ProviderModelsResponse,
+  ProviderPatchBody,
+  ProviderResponse,
+  ProvidersResponse,
+  PublishBody,
+  RouteResponse,
+} from '../../protocol/gatewayApi';
 import { providerAccess } from '../connectors/access';
 import { UpstreamFailure } from '../connectors/connector';
 import { errorResponse, jsonResponse } from '../http';
-import type { ProviderModel, ProviderModelInput, ProviderRecord } from '../providerStore';
+import type { ProviderModelInput, ProviderRecord } from '../providerStore';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';
 import { boolean, InputError, optionalString, readBody, string } from './input';
@@ -23,7 +35,7 @@ function existing(deps: AdminDeps, id: string): ProviderRecord {
   return provider;
 }
 
-function discovered(deps: AdminDeps, id: string): Array<ProviderModel & { published: boolean }> {
+function discovered(deps: AdminDeps, id: string): DiscoveredModel[] {
   const routes = deps.models.list().flatMap((model) => model.routes);
   return deps.providers.models(id).map((model) => ({
     ...model,
@@ -50,27 +62,32 @@ async function create(req: Request, deps: AdminDeps): Promise<Response> {
     credential: apiKey === undefined ? null : JSON.stringify({ apiKey }),
     autoPublish,
   }, deps.now());
-  return jsonResponse({ provider }, 201);
+  return jsonResponse({ provider } satisfies ProviderResponse, 201);
 }
 
 async function update(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
-  const name = optionalString(body.name, 'name');
-  const url = body.baseUrl === undefined || body.baseUrl === null ? body.baseUrl : baseUrl(body.baseUrl);
+  const patch: ProviderPatchBody = {
+    name: optionalString(body.name, 'name'),
+    baseUrl: body.baseUrl === undefined || body.baseUrl === null ? body.baseUrl : baseUrl(body.baseUrl),
+    enabled: boolean(body.enabled, 'enabled'),
+    autoPublish: boolean(body.autoPublish, 'autoPublish'),
+  };
   const apiKey = body.apiKey === null ? null : optionalString(body.apiKey, 'apiKey');
-  const enabled = boolean(body.enabled, 'enabled');
-  const autoPublish = boolean(body.autoPublish, 'autoPublish');
+  if (apiKey !== undefined) patch.apiKey = apiKey;
   const before = existing(deps, id);
   const connector = deps.connector(before.connector);
   if (!connector) throw new InputError('connector 无效');
-  if (url === null && connector.defaultBaseUrl === null) throw new InputError('baseUrl 无效');
+  if (patch.baseUrl === null && connector.defaultBaseUrl === null) throw new InputError('baseUrl 无效');
   if (apiKey === null && connector.credential === 'api-key') throw new InputError('apiKey 无效');
   if (apiKey !== undefined && connector.credential === 'login') throw new InputError('apiKey 无效');
-  deps.providers.update(id, { name, baseUrl: url, enabled, autoPublish });
+  deps.providers.update(id, patch);
   if (apiKey !== undefined) {
     deps.providers.setCredential(id, apiKey === null ? null : JSON.stringify({ apiKey }));
   }
-  return jsonResponse({ provider: deps.providers.get(id) });
+  const provider = deps.providers.get(id);
+  if (!provider) throw new InputError('未找到提供商', 404);
+  return jsonResponse({ provider } satisfies ProviderResponse);
 }
 
 async function refresh(_req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
@@ -91,26 +108,29 @@ async function refresh(_req: Request, deps: AdminDeps, [id]: string[]): Promise<
       if (!model.published) deps.models.publish(id, model.upstreamId, deps.now());
     }
   }
-  return jsonResponse({ models: discovered(deps, id) });
+  return jsonResponse({ models: discovered(deps, id) } satisfies ProviderModelsResponse);
 }
 
 async function publish(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
-  const upstreamId = string(body.upstreamId, 'upstreamId');
+  const input: PublishBody = { upstreamId: string(body.upstreamId, 'upstreamId') };
   existing(deps, id);
-  return jsonResponse({ route: deps.models.publish(id, upstreamId, deps.now()) }, 201);
+  const route = deps.models.publish(id, input.upstreamId, deps.now());
+  return jsonResponse({ route } satisfies RouteResponse, 201);
 }
 
 function connectors(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ connectors: deps.connectors().map(({ id, name, defaultBaseUrl, credential }) => ({
+  const list: ConnectorInfo[] = deps.connectors().map(({ id, name, defaultBaseUrl, credential }) => ({
     id, name, defaultBaseUrl, credential,
-  })) });
+  }));
+  return jsonResponse({ connectors: list } satisfies ConnectorsResponse);
 }
 
 function list(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ providers: deps.providers.list().map((provider) => ({
+  const providers: ProviderListItem[] = deps.providers.list().map((provider) => ({
     ...provider, modelCount: deps.providers.models(provider.id).length,
-  })) });
+  }));
+  return jsonResponse({ providers } satisfies ProvidersResponse);
 }
 
 function remove(_req: Request, deps: AdminDeps, [id]: string[]): Response {
@@ -120,7 +140,7 @@ function remove(_req: Request, deps: AdminDeps, [id]: string[]): Response {
 
 function listModels(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   existing(deps, id);
-  return jsonResponse({ models: discovered(deps, id) });
+  return jsonResponse({ models: discovered(deps, id) } satisfies ProviderModelsResponse);
 }
 
 const routes: readonly AdminRoute[] = [

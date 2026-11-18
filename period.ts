@@ -1,4 +1,7 @@
-export type ResetPeriod = 'none' | 'day' | 'week' | 'month';
+import type { ResetPeriod } from '../protocol/gatewayApi';
+
+// `ResetPeriod` crosses the management API; protocol/gatewayApi.ts defines it once.
+export type { ResetPeriod };
 
 export function periodStart(period: ResetPeriod, now: Date): Date | null {
   if (period === 'none') return null;

@@ -3,7 +3,8 @@ import { isObject } from '../protocols/json';
 import type { JsonObject } from '../protocols/json';
 import type { Price } from '../pricing';
 import { UpstreamFailure } from './connector';
-import type { Connector, DiscoveredModel, ProviderAccess } from './connector';
+import type { Connector, ProviderAccess } from './connector';
+import type { ProviderModelInput } from '../providerStore';
 import { endpoint, fetchModels, optionalApiKey, positiveNumber, requiredApiKey } from './http';
 
 interface Vendor {
@@ -12,7 +13,7 @@ interface Vendor {
   defaultBaseUrl: string | null;
   keyRequired: boolean;
   /** One entry of this vendor's model list as the gateway records it. */
-  model(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'>;
+  model(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'>;
 }
 
 interface ModelRequest {
@@ -35,7 +36,7 @@ function centsPer100M(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value / 10_000 : null;
 }
 
-function openaiModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> {
+function openaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
   return {
     contextLength: positiveNumber(item.context_length) ?? positiveNumber(item.context_window)
       ?? positiveNumber(item.max_model_len),
@@ -44,7 +45,7 @@ function openaiModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> {
   };
 }
 
-function openrouterModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> {
+function openrouterModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
   const pricing = isObject(item.pricing) ? item.pricing : {};
   const top = isObject(item.top_provider) ? item.top_provider : {};
   return {
@@ -59,7 +60,7 @@ function openrouterModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> 
   };
 }
 
-function xaiModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> {
+function xaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
   return {
     contextLength: positiveNumber(item.context_length),
     maxOutputTokens: null,
@@ -92,7 +93,7 @@ function connector(vendor: Vendor): Connector {
       const { url, headers, key } = request(provider, '/models');
       const body = await fetchModels(url, headers, key);
       if (!isObject(body) || !Array.isArray(body.data)) throw new UpstreamFailure('Invalid model list', null);
-      const models: DiscoveredModel[] = [];
+      const models: ProviderModelInput[] = [];
       for (const item of body.data) {
         if (!isObject(item) || typeof item.id !== 'string') continue;
         models.push({ upstreamId: item.id, ...vendor.model(item) });

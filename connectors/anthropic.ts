@@ -1,7 +1,8 @@
 // Anthropic Messages connector and paginated model discovery.
 import { isObject } from '../protocols/json';
 import { UpstreamFailure } from './connector';
-import type { Connector, DiscoveredModel, ProviderAccess } from './connector';
+import type { Connector, ProviderAccess } from './connector';
+import type { ProviderModelInput } from '../providerStore';
 import { endpoint, fetchModels, positiveNumber, requiredApiKey } from './http';
 
 /** The version in current examples, documented in docs/gateway-connectors.md §2. */
@@ -25,7 +26,7 @@ function request(provider: ProviderAccess, path: string): ModelRequest {
 }
 
 async function modelsPage(provider: ProviderAccess, after: string | null): Promise<{
-  models: DiscoveredModel[];
+  models: ProviderModelInput[];
   next: string | null;
 }> {
   const query = new URLSearchParams({ limit: '1000' });
@@ -35,7 +36,7 @@ async function modelsPage(provider: ProviderAccess, after: string | null): Promi
   if (!isObject(body) || !Array.isArray(body.data) || typeof body.has_more !== 'boolean') {
     throw new UpstreamFailure('Invalid model list', null);
   }
-  const models: DiscoveredModel[] = [];
+  const models: ProviderModelInput[] = [];
   for (const item of body.data) {
     if (!isObject(item) || typeof item.id !== 'string') continue;
     models.push({
@@ -63,7 +64,7 @@ export const anthropic: Connector = {
     return { url, headers, protocol: 'messages' };
   },
   async models(provider) {
-    const models: DiscoveredModel[] = [];
+    const models: ProviderModelInput[] = [];
     let after: string | null = null;
     for (let page = 0; page < MAX_PAGES; page++) {
       const result = await modelsPage(provider, after);

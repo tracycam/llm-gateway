@@ -2,6 +2,19 @@ import { Database } from 'bun:sqlite';
 import { localDay } from './period';
 import { rollKeyPeriod } from './keyStore';
 import type { Usage } from './pricing';
+import type {
+  RequestLogRow,
+  UsageByDayRow,
+  UsageByKeyRow,
+  UsageByModelRow,
+  UsageByProviderRow,
+  UsageSummary,
+  UsageTotals,
+} from '../protocol/gatewayApi';
+
+// `UsageSummary` crosses the management API; protocol/gatewayApi.ts defines it once and this
+// module re-exports it under its current name.
+export type { UsageSummary };
 
 export interface UsageEntry {
   protocol: string;
@@ -19,17 +32,6 @@ export interface UsageEntry {
 export interface DayRange {
   from?: string;
   to?: string;
-}
-export interface UsageSummary {
-  requests: number;
-  errors: number;
-  unknownUsage: number;
-  uncosted: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  cost: number;
 }
 interface SummaryRow {
   id: string;
@@ -143,7 +145,7 @@ export class UsageStore {
     })();
   }
 
-  byModel(range: DayRange = {}): Array<UsageSummary & { modelId: string; modelName: string }> {
+  byModel(range: DayRange = {}): UsageByModelRow[] {
     return this.summarize('model_id', 'model_name', range).map((row) => ({
       modelId: row.id,
       modelName: row.name,
@@ -151,7 +153,7 @@ export class UsageStore {
     }));
   }
 
-  byProvider(modelId: string, range: DayRange = {}): Array<UsageSummary & { providerId: string; providerName: string }> {
+  byProvider(modelId: string, range: DayRange = {}): UsageByProviderRow[] {
     return this.summarize('provider_id', 'provider_name', range, { modelId }).map((row) => ({
       providerId: row.id,
       providerName: row.name,
@@ -159,7 +161,7 @@ export class UsageStore {
     }));
   }
 
-  byKey(range: DayRange = {}): Array<UsageSummary & { keyId: string; keyName: string }> {
+  byKey(range: DayRange = {}): UsageByKeyRow[] {
     return this.summarize('key_id', 'key_name', range).map((row) => ({
       keyId: row.id,
       keyName: row.name,
@@ -167,16 +169,16 @@ export class UsageStore {
     }));
   }
 
-  byDay(range: DayRange = {}, filter: { modelId?: string; keyId?: string } = {}): Array<UsageSummary & { day: string }> {
+  byDay(range: DayRange = {}, filter: { modelId?: string; keyId?: string } = {}): UsageByDayRow[] {
     return this.summarize('day', 'day', range, filter).map((row) => ({ day: row.id, ...mapSummary(row) }));
   }
 
-  totals(): { requestCount: number; inputTokens: number; outputTokens: number; cost: number } {
+  totals(): UsageTotals {
     const row = this.db.query<TotalRow, []>('SELECT * FROM gateway_totals WHERE id = 1').get()!;
     return { requestCount: row.request_count, inputTokens: row.prompt_tokens, outputTokens: row.completion_tokens, cost: row.cost };
   }
 
-  logs() {
+  logs(): RequestLogRow[] {
     return this.db.query<LogRow, []>('SELECT * FROM request_logs ORDER BY id DESC LIMIT 200').all().map((row) => ({
       id: row.id,
       timestamp: row.timestamp,

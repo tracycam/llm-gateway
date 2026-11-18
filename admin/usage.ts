@@ -1,4 +1,12 @@
 // Usage and request log management routes.
+import type {
+  LogsResponse,
+  TotalsResponse,
+  UsageByDayResponse,
+  UsageByKeyResponse,
+  UsageByModelResponse,
+  UsageByProviderResponse,
+} from '../../protocol/gatewayApi';
 import { jsonResponse } from '../http';
 import type { DayRange } from '../usageStore';
 import type { AdminDeps } from './deps';
@@ -27,20 +35,22 @@ function usage(req: Request, deps: AdminDeps): Response {
   const key = query.get('key');
   if (by === 'provider') {
     if (!model) throw new InputError('model 无效');
-    return jsonResponse({ rows: deps.usage.byProvider(model, range) });
+    return jsonResponse({ rows: deps.usage.byProvider(model, range) } satisfies UsageByProviderResponse);
   }
-  if (by === 'model') return jsonResponse({ rows: deps.usage.byModel(range) });
-  if (by === 'key') return jsonResponse({ rows: deps.usage.byKey(range) });
+  if (by === 'model') {
+    return jsonResponse({ rows: deps.usage.byModel(range) } satisfies UsageByModelResponse);
+  }
+  if (by === 'key') return jsonResponse({ rows: deps.usage.byKey(range) } satisfies UsageByKeyResponse);
   const rows = deps.usage.byDay(range, { modelId: model ?? undefined, keyId: key ?? undefined });
-  return jsonResponse({ rows });
+  return jsonResponse({ rows } satisfies UsageByDayResponse);
 }
 
 function totals(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ totals: deps.usage.totals() });
+  return jsonResponse({ totals: deps.usage.totals() } satisfies TotalsResponse);
 }
 
 function logs(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ logs: deps.usage.logs() });
+  return jsonResponse({ logs: deps.usage.logs() } satisfies LogsResponse);
 }
 
 function clearLogs(_req: Request, deps: AdminDeps): Response {

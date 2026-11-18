@@ -1,6 +1,15 @@
 // Model and routing management routes.
+import type {
+  ModelCreateBody,
+  ModelPatchBody,
+  ModelResponse,
+  ModelsResponse,
+  Price,
+  RouteCreateBody,
+  RoutePatchBody,
+  RouteResponse,
+} from '../../protocol/gatewayApi';
 import { jsonResponse } from '../http';
-import type { Price } from '../pricing';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';
 import {
@@ -23,54 +32,62 @@ function routePrice(value: unknown): Price | null | undefined {
 
 async function createModel(req: Request, deps: AdminDeps): Promise<Response> {
   const body = await readBody(req);
-  const name = string(body.name, 'name');
-  const modelPrice = body.price === undefined ? undefined : price(body.price);
-  const context = contextLength(body.contextLength);
-  const model = deps.models.create({ name, price: modelPrice, contextLength: context }, deps.now());
-  return jsonResponse({ model }, 201);
+  const input: ModelCreateBody = {
+    name: string(body.name, 'name'),
+    price: body.price === undefined ? undefined : price(body.price),
+    contextLength: contextLength(body.contextLength),
+  };
+  const model = deps.models.create(input, deps.now());
+  return jsonResponse({ model } satisfies ModelResponse, 201);
 }
 
 async function updateModel(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
-  const name = optionalString(body.name, 'name');
-  const modelPrice = body.price === undefined ? undefined : price(body.price);
-  const context = contextLength(body.contextLength);
-  const enabled = boolean(body.enabled, 'enabled');
-  const model = deps.models.update(id, { name, price: modelPrice, contextLength: context, enabled });
+  const patch: ModelPatchBody = {
+    name: optionalString(body.name, 'name'),
+    price: body.price === undefined ? undefined : price(body.price),
+    contextLength: contextLength(body.contextLength),
+    enabled: boolean(body.enabled, 'enabled'),
+  };
+  const model = deps.models.update(id, patch);
   if (!model) throw new InputError('未找到模型', 404);
-  return jsonResponse({ model });
+  return jsonResponse({ model } satisfies ModelResponse);
 }
 
 async function createRoute(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
-  const providerId = string(body.providerId, 'providerId');
-  const upstreamModel = string(body.upstreamModel, 'upstreamModel');
-  const weight = integerAtLeast(body.weight, 'weight', 1);
-  const override = routePrice(body.price);
+  const input: RouteCreateBody = {
+    providerId: string(body.providerId, 'providerId'),
+    upstreamModel: string(body.upstreamModel, 'upstreamModel'),
+    weight: integerAtLeast(body.weight, 'weight', 1),
+    price: routePrice(body.price),
+  };
   if (!deps.models.get(id)) throw new InputError('未找到模型', 404);
-  if (!deps.providers.get(providerId)) throw new InputError('providerId 无效');
-  const route = deps.models.addRoute(id, { providerId, upstreamModel, weight, price: override });
-  return jsonResponse({ route }, 201);
+  if (!deps.providers.get(input.providerId)) throw new InputError('providerId 无效');
+  const route = deps.models.addRoute(id, input);
+  return jsonResponse({ route } satisfies RouteResponse, 201);
 }
 
 async function updateRoute(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
-  const weight = integerAtLeast(body.weight, 'weight', 1);
-  const enabled = boolean(body.enabled, 'enabled');
-  const override = routePrice(body.price);
-  const route = deps.models.updateRoute(id, { weight, enabled, price: override });
+  const patch: RoutePatchBody = {
+    weight: integerAtLeast(body.weight, 'weight', 1),
+    enabled: boolean(body.enabled, 'enabled'),
+    price: routePrice(body.price),
+  };
+  const route = deps.models.updateRoute(id, patch);
   if (!route) throw new InputError('未找到路由', 404);
-  return jsonResponse({ route });
+  return jsonResponse({ route } satisfies RouteResponse);
 }
 
 function listModels(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ models: deps.models.list() });
+  return jsonResponse({ models: deps.models.list() } satisfies ModelsResponse);
 }
 
 function getModel(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   const model = deps.models.get(id);
   if (!model) throw new InputError('未找到模型', 404);
-  return jsonResponse({ model });
+  return jsonResponse({ model } satisfies ModelResponse);
 }
 
 function deleteModel(_req: Request, deps: AdminDeps, [id]: string[]): Response {

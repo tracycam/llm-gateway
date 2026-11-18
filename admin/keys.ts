@@ -1,6 +1,12 @@
 // API key management routes.
+import type {
+  KeyCreateBody,
+  KeyCreatedResponse,
+  KeyPatchBody,
+  KeyResponse,
+  KeysResponse,
+} from '../../protocol/gatewayApi';
 import { jsonResponse } from '../http';
-import type { KeyPatch } from '../keyStore';
 import type { ResetPeriod } from '../period';
 import type { JsonObject } from '../protocols/json';
 import type { AdminDeps } from './deps';
@@ -31,7 +37,7 @@ function expiresAt(value: unknown): string | null | undefined {
   return new Date(value).toISOString();
 }
 
-function limits(body: JsonObject, deps: AdminDeps): Omit<KeyPatch, 'name' | 'enabled'> {
+function limits(body: JsonObject, deps: AdminDeps): Omit<KeyPatchBody, 'name' | 'enabled'> {
   const restricted = boolean(body.restricted, 'restricted');
   const ids = modelIds(body.modelIds);
   const costLimit = body.costLimit === undefined
@@ -52,25 +58,25 @@ function limits(body: JsonObject, deps: AdminDeps): Omit<KeyPatch, 'name' | 'ena
 }
 
 function list(_req: Request, deps: AdminDeps): Response {
-  return jsonResponse({ keys: deps.keys.list(deps.now()) });
+  return jsonResponse({ keys: deps.keys.list(deps.now()) } satisfies KeysResponse);
 }
 
 async function create(req: Request, deps: AdminDeps): Promise<Response> {
   const body = await readBody(req);
   const name = string(body.name, 'name');
-  const settings = limits(body, deps);
-  const { token, ...key } = deps.keys.create({ ...settings, name }, deps.now());
-  return jsonResponse({ key, token }, 201);
+  const input: KeyCreateBody = { ...limits(body, deps), name };
+  const { token, ...key } = deps.keys.create(input, deps.now());
+  return jsonResponse({ key, token } satisfies KeyCreatedResponse, 201);
 }
 
 async function update(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const name = optionalString(body.name, 'name');
   const enabled = boolean(body.enabled, 'enabled');
-  const patch = { ...limits(body, deps), name, enabled };
+  const patch: KeyPatchBody = { ...limits(body, deps), name, enabled };
   const key = deps.keys.update(id, patch, deps.now());
   if (!key) throw new InputError('未找到密钥', 404);
-  return jsonResponse({ key });
+  return jsonResponse({ key } satisfies KeyResponse);
 }
 
 function remove(_req: Request, deps: AdminDeps, [id]: string[]): Response {
@@ -81,7 +87,7 @@ function remove(_req: Request, deps: AdminDeps, [id]: string[]): Response {
 function reset(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   const key = deps.keys.resetUsage(id, deps.now());
   if (!key) throw new InputError('未找到密钥', 404);
-  return jsonResponse({ key });
+  return jsonResponse({ key } satisfies KeyResponse);
 }
 
 const routes: readonly AdminRoute[] = [

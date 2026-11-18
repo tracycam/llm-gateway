@@ -1,49 +1,17 @@
 import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import type { Price } from './pricing';
+import type {
+  ModelCreateBody, ModelPatchBody, ModelRecord, Price, RouteCreateBody, RoutePatchBody, RouteRecord,
+} from '../protocol/gatewayApi';
 import { StoreRefusal } from './schema';
 
-export interface RouteRecord {
-  id: string;
-  modelId: string;
-  providerId: string;
-  providerName: string;
-  upstreamModel: string;
-  weight: number;
-  enabled: boolean;
-  price: Price | null;
-}
-export interface ModelRecord {
-  id: string;
-  name: string;
-  price: Price;
-  contextLength: number | null;
-  enabled: boolean;
-  createdAt: string;
-  routes: RouteRecord[];
-}
-export interface ModelInput {
-  name: string;
-  price?: Price;
-  contextLength?: number | null;
-}
-export interface ModelPatch {
-  name?: string;
-  price?: Price;
-  contextLength?: number | null;
-  enabled?: boolean;
-}
-export interface RouteInput {
-  providerId: string;
-  upstreamModel: string;
-  weight?: number;
-  price?: Price | null;
-}
-export interface RoutePatch {
-  weight?: number;
-  enabled?: boolean;
-  price?: Price | null;
-}
+// `ModelRecord`, `RouteRecord` and the bodies cross the management API; protocol/gatewayApi.ts
+// defines them once and this module re-exports them under their current names.
+export type { ModelRecord, RouteRecord };
+export type ModelInput = ModelCreateBody;
+export type ModelPatch = ModelPatchBody;
+export type RouteInput = RouteCreateBody;
+export type RoutePatch = RoutePatchBody;
 
 interface ModelRow {
   id: string;

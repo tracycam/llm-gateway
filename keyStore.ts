@@ -1,50 +1,15 @@
 import { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import { nextReset, periodStart, type ResetPeriod } from './period';
-import type { Price } from './pricing';
-import type { ModelRecord } from './modelStore';
+import type {
+  KeyCreateBody, KeyPatchBody, KeyRecord, ModelRecord, Price,
+} from '../protocol/gatewayApi';
 
-export interface KeyRecord {
-  id: string;
-  name: string;
-  prefix: string;
-  enabled: boolean;
-  restricted: boolean;
-  modelIds: string[];
-  costLimit: number | null;
-  resetPeriod: ResetPeriod;
-  periodStart: string;
-  periodCost: number;
-  nextResetAt: string | null;
-  maxConcurrency: number | null;
-  expiresAt: string | null;
-  requestCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalCost: number;
-  lastUsedAt: string | null;
-  createdAt: string;
-}
-
-export interface KeyInput {
-  name: string;
-  restricted?: boolean;
-  modelIds?: string[];
-  costLimit?: number | null;
-  resetPeriod?: ResetPeriod;
-  maxConcurrency?: number | null;
-  expiresAt?: string | null;
-}
-export interface KeyPatch {
-  name?: string;
-  enabled?: boolean;
-  restricted?: boolean;
-  modelIds?: string[];
-  costLimit?: number | null;
-  resetPeriod?: ResetPeriod;
-  maxConcurrency?: number | null;
-  expiresAt?: string | null;
-}
+// `KeyRecord` and the create/patch bodies cross the management API; protocol/gatewayApi.ts
+// defines them once and this module re-exports them under their current names.
+export type { KeyRecord };
+export type KeyInput = KeyCreateBody;
+export type KeyPatch = KeyPatchBody;
 interface KeyRow {
   id: string;
   name: string;

@@ -7,7 +7,8 @@ import type { JsonObject } from '../protocols/json';
 import type { Protocol } from '../protocols/protocol';
 import { ANTHROPIC_VERSION } from './anthropic';
 import { UpstreamFailure } from './connector';
-import type { Connector, DiscoveredModel, ProviderAccess, UpstreamTarget } from './connector';
+import type { Connector, ProviderAccess, UpstreamTarget } from './connector';
+import type { ProviderModelInput } from '../providerStore';
 import { endpoint, fetchModels, positiveNumber, requiredApiKey } from './http';
 
 /**
@@ -36,7 +37,7 @@ function priceOf(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function opencodeModel(item: JsonObject): Omit<DiscoveredModel, 'upstreamId'> {
+function opencodeModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
   const text = objectOf(objectOf(item.cost).text);
   const input = objectOf(text.input);
   const output = objectOf(text.output);
@@ -105,7 +106,7 @@ function connector(id: string, name: string, defaultBase: string): Connector {
       if (!isObject(body) || !Array.isArray(body.data)) {
         throw new UpstreamFailure('Invalid model list', null);
       }
-      const models: DiscoveredModel[] = [];
+      const models: ProviderModelInput[] = [];
       for (const item of body.data) {
         if (!isObject(item) || typeof item.id !== 'string') continue;
         if (item.type !== undefined && item.type !== 'chat') continue;
