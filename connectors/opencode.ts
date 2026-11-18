@@ -1,6 +1,7 @@
 // OpenCode Zen and OpenCode Go: one implementation for the two Console plans. Both accept every
 // listed model on the root of the client's own protocol and convert it themselves, so a request
 // is passed through untranslated. Wire facts and their evidence: docs/gateway-connectors.md §9.
+import pkg from '../../package.json';
 import { isObject } from '../protocols/json';
 import type { JsonObject } from '../protocols/json';
 import type { Protocol } from '../protocols/protocol';
@@ -11,10 +12,10 @@ import { endpoint, fetchModels, positiveNumber, requiredApiKey } from './http';
 
 /**
  * Sent on every request: OpenCode asks a client to identify itself rather than hide behind a
- * generic library's name (docs/gateway-connectors.md §9). Without a version, because reading one
- * from the root `package.json` would break the image build, whose build stage does not copy it.
+ * generic library's name (docs/gateway-connectors.md §9). The version is the root
+ * `package.json`'s, which the image's build stage copies for this import.
  */
-export const USER_AGENT = 'aihub-gateway';
+export const USER_AGENT = `aihub-gateway/${pkg.version}`;
 
 // The header OpenCode asks a client to fill with a stable id per conversation; §9.
 const SESSION_HEADER = 'x-opencode-session';

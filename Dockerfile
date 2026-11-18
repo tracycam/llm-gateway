@@ -5,6 +5,8 @@ ARG BUN_IMAGE=oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6
 
 FROM ${BUN_IMAGE} AS build
 WORKDIR /src
+# The connector's user agent carries this version.
+COPY package.json package.json
 COPY web/package.json web/bun.lock web/
 RUN cd web && bun install --frozen-lockfile
 COPY protocol protocol
