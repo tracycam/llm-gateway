@@ -171,8 +171,16 @@ function loginStatus(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   return jsonResponse({ login: deps.logins.status(id) } satisfies LoginResponse);
 }
 
-/** Sign the provider out: stop a pending login and drop the credential it was signed in with. */
+/** Cancel a pending sign-in. A credential already stored, and its refused mark, stay as they are. */
 function cancelLogin(_req: Request, deps: AdminDeps, [id]: string[]): Response {
+  const provider = existing(deps, id);
+  loginOnly(deps, provider);
+  deps.logins.cancel(id);
+  return new Response(null, { status: 204 });
+}
+
+/** Sign the provider out: stop a pending sign-in and drop the credential stored for it. */
+function signOut(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   const provider = existing(deps, id);
   loginOnly(deps, provider);
   deps.logins.cancel(id);
@@ -192,6 +200,7 @@ const routes: readonly AdminRoute[] = [
   ['POST', /^\/api\/gateway\/providers\/([^/]+)\/login$/, startLogin],
   ['GET', /^\/api\/gateway\/providers\/([^/]+)\/login$/, loginStatus],
   ['DELETE', /^\/api\/gateway\/providers\/([^/]+)\/login$/, cancelLogin],
+  ['DELETE', /^\/api\/gateway\/providers\/([^/]+)\/credential$/, signOut],
 ];
 
 /** Handle provider and connector paths; return null for other paths. */

@@ -159,15 +159,17 @@ test('rule B2: a model whose only usable route is rejected answers as it does to
   expect((await list.json() as { data: unknown[] }).data).toEqual([]);
 });
 
-test('rule A4: the login routes need the administrator', async () => {
+test('rule A4: the login and sign-out routes need the administrator', async () => {
   const f = setup();
-  for (const method of ['POST', 'GET', 'DELETE']) {
-    const response = await f.call(`/api/gateway/providers/${f.login.id}/login`, {
-      method,
-      body: method === 'POST' ? JSON.stringify({}) : undefined,
-    });
-    expect([method, response.status]).toEqual([method, 401]);
-    expect(await response.json()).toEqual({ error: '未登录' });
+  for (const path of ['login', 'credential']) {
+    for (const method of ['POST', 'GET', 'DELETE']) {
+      const response = await f.call(`/api/gateway/providers/${f.login.id}/${path}`, {
+        method,
+        body: method === 'POST' ? JSON.stringify({}) : undefined,
+      });
+      expect([path, method, response.status]).toEqual([path, method, 401]);
+      expect(await response.json()).toEqual({ error: '未登录' });
+    }
   }
 });
 

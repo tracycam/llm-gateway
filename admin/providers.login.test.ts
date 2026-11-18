@@ -115,13 +115,16 @@ test('rule A4: a connector that does not log in is refused with 400', async () =
   expect(await (await f.call(`/providers/${id}/login`))!.json()).toEqual({ login: { state: 'none' } });
 });
 
-test('rule A4: an unknown provider is 404 on all three routes', async () => {
+test('rule A4: an unknown provider is 404 on every login and sign-out route', async () => {
   const f = setup();
   for (const method of ['POST', 'GET', 'DELETE']) {
     const response = await f.call('/providers/missing/login', method);
     expect([method, response?.status]).toEqual([method, 404]);
     expect(await response!.json()).toEqual({ error: '未找到提供商' });
   }
+  const signOut = await f.call('/providers/missing/credential', 'DELETE');
+  expect(signOut?.status).toBe(404);
+  expect(await signOut!.json()).toEqual({ error: '未找到提供商' });
 });
 
 test('rule A4: a login the authorization server cannot start is 502 and leaves no session', async () => {
@@ -133,12 +136,37 @@ test('rule A4: a login the authorization server cannot start is 502 and leaves n
   expect(await (await f.call(`/providers/${id}/login`))!.json()).toEqual({ login: { state: 'none' } });
 });
 
-test('rule A4: DELETE cancels the session and removes the credential', async () => {
+test('rule A4: DELETE login ends a pending session and leaves the credential and its mark', async () => {
+  const f = setup();
+  const id = addProvider(f);
+  expect((await f.call(`/providers/${id}/login`, 'POST'))?.status).toBe(201);
+  const stored = '{"accessToken":"a","refreshToken":"r","expiresAt":null}';
+  f.providers.setCredential(id, stored);
+  f.providers.rejectCredential(id);
+  const response = await f.call(`/providers/${id}/login`, 'DELETE');
+  expect(response?.status).toBe(204);
+  // Cancelling a sign-in must not cost the administrator the login that already worked.
+  expect(f.providers.credential(id)).toBe(stored);
+  expect(f.providers.get(id)?.hasCredential).toBe(true);
+  expect(f.providers.get(id)?.credentialRejected).toBe(true);
+  expect(await (await f.call(`/providers/${id}/login`))!.json()).toEqual({ login: { state: 'none' } });
+});
+
+test('rule A4: DELETE login answers 204 whether or not a session was pending', async () => {
+  const f = setup();
+  const id = addProvider(f);
+  expect((await f.call(`/providers/${id}/login`, 'DELETE'))?.status).toBe(204);
+  expect(f.providers.credential(id)).toBeNull();
+  expect((await f.call(`/providers/${id}/login`, 'POST'))?.status).toBe(201);
+  expect((await f.call(`/providers/${id}/login`, 'DELETE'))?.status).toBe(204);
+});
+
+test('rule A4: DELETE credential signs the provider out and stops a pending session', async () => {
   const f = setup();
   const id = addProvider(f);
   expect((await f.call(`/providers/${id}/login`, 'POST'))?.status).toBe(201);
   f.providers.setCredential(id, '{"accessToken":"a","refreshToken":"r","expiresAt":null}');
-  const response = await f.call(`/providers/${id}/login`, 'DELETE');
+  const response = await f.call(`/providers/${id}/credential`, 'DELETE');
   expect(response?.status).toBe(204);
   expect(f.providers.credential(id)).toBeNull();
   expect(f.providers.get(id)?.hasCredential).toBe(false);
@@ -169,13 +197,15 @@ test('rule A4: a provider on a login connector is created without a credential',
     .toEqual({ login: { state: 'none' } });
 });
 
-test('rule A4: DELETE on a provider that does not log in keeps its API key', async () => {
+test('rule A4: deleting a key provider\'s login or credential is 400 and keeps its API key', async () => {
   const f = setup();
   const id = addProvider(f, 'fake-key');
   f.providers.setCredential(id, '{"apiKey":"secret"}');
-  const response = await f.call(`/providers/${id}/login`, 'DELETE');
-  expect(response?.status).toBe(400);
-  expect(await response!.json()).toEqual({ error: '该提供商不使用登录' });
-  expect(f.providers.credential(id)).toBe('{"apiKey":"secret"}');
-  expect(f.providers.get(id)?.hasCredential).toBe(true);
+  for (const path of ['login', 'credential']) {
+    const response = await f.call(`/providers/${id}/${path}`, 'DELETE');
+    expect([path, response?.status]).toEqual([path, 400]);
+    expect(await response!.json()).toEqual({ error: '该提供商不使用登录' });
+    expect(f.providers.credential(id)).toBe('{"apiKey":"secret"}');
+    expect(f.providers.get(id)?.hasCredential).toBe(true);
+  }
 });
