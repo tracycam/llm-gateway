@@ -11,6 +11,7 @@ import { openGatewayDatabase } from './database';
 import { KeyStore } from './keyStore';
 import { ModelStore } from './modelStore';
 import { ProviderStore } from './providerStore';
+import { FakeDaemon } from './testing/fakeDaemon';
 
 const ADMIN = 'admin-token-0123456789';
 const NOW = new Date('2026-01-01T00:00:00.000Z');
@@ -29,20 +30,23 @@ interface UpstreamCall {
 }
 
 /** Records provider requests and answers like an OpenAI-compatible upstream. */
-function stubFetch() {
+function stubFetch(upstream?: (body: Record<string, unknown> | null) => Response | undefined) {
   const calls: UpstreamCall[] = [];
   const fetchStub = Object.assign(
     async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null;
       calls.push({ url, body });
+      const overridden = upstream?.(body);
+      if (overridden !== undefined) return overridden;
       if (body?.stream === true) {
         const frames = [
           { choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] },
           { choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] },
           { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
         ];
-        const text = `${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}data: [DONE]\n\n`;
+        const framesText = frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('');
+        const text = `${framesText}data: [DONE]\n\n`;
         return new Response(text, { headers: { 'content-type': 'text/event-stream' } });
       }
       return Response.json({
@@ -50,7 +54,11 @@ function stubFetch() {
         object: 'chat.completion',
         created: 0,
         model: body?.model ?? 'upstream-model',
-        choices: [{ index: 0, message: { role: 'assistant', content: 'stub answer' }, finish_reason: 'stop' }],
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'stub answer' },
+          finish_reason: 'stop',
+        }],
         usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
       });
     },
@@ -82,10 +90,15 @@ interface Fixture {
   calls: UpstreamCall[];
 }
 
-function setup(): Fixture {
+interface SetupOptions {
+  /** Answers a provider request instead of the default stub, when it returns a response. */
+  upstream?: (body: Record<string, unknown> | null) => Response | undefined;
+}
+
+function setup(options: SetupOptions = {}): Fixture {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-app-'));
   dirs.push(dir);
-  const { calls, fetchStub } = stubFetch();
+  const { calls, fetchStub } = stubFetch(options.upstream);
   const webDistDir = path.join(dir, 'web');
   const db = openGatewayDatabase(dir);
   const app = createApp({
@@ -125,6 +138,15 @@ function withKey(f: Fixture, pathname: string, init: RequestInit = {}): Promise<
 
 function post(body: unknown): RequestInit {
   return { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } };
+}
+
+/** Waits for an observable event; the poll interval is only how often it looks. */
+async function until(what: string, condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition()) {
+    if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(5);
+  }
 }
 
 test('GET /healthz answers 200 JSON without an administrator credential', async () => {
@@ -235,7 +257,9 @@ test('a malformed percent escape is the protocol 404, not a server error', async
   const openaiBody = await openai.json() as { error: { message: string } };
   expect(openaiBody.error.message).toBeString();
 
-  const anthropic = await withKey(f, '/v1/models/%E0%A4%A', { headers: { 'anthropic-version': '2026-10-21' } });
+  const anthropic = await withKey(f, '/v1/models/%E0%A4%A', {
+    headers: { 'anthropic-version': '2026-10-21' },
+  });
   expect(anthropic.status).toBe(404);
   const anthropicBody = await anthropic.json() as { type: string; error: { message: string } };
   expect(anthropicBody.type).toBe('error');
@@ -281,14 +305,46 @@ test('every /v1 response carries CORS, including errors and streams; no /api res
   }
 });
 
+test('a /v1 JSON answer keeps its content-type through the CORS header', async () => {
+  const f = setup();
+  const response = await withKey(f, '/v1/chat/completions', post({ model: 'stub-model' }));
+  expect(response.status).toBe(200);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  expect(response.headers.get('content-type')).toContain('application/json');
+});
+
+test('a /v1 stream answer keeps its content-type through the CORS header', async () => {
+  const f = setup();
+  const response = await withKey(f, '/v1/chat/completions', post({ model: 'stub-model', stream: true }));
+  expect(response.status).toBe(200);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  expect(response.headers.get('content-type')).toContain('text/event-stream');
+  expect(await response.text()).toContain('"content":"hi"');
+});
+
+test('a 429 from the handler keeps its retry-after through the CORS header', async () => {
+  const f = setup({
+    upstream: () => new Response('{"error":{"message":"busy"}}', {
+      status: 429,
+      headers: { 'content-type': 'application/json', 'retry-after': '2' },
+    }),
+  });
+  const response = await withKey(f, '/v1/chat/completions', post({ model: 'stub-model' }));
+  expect(response.status).toBe(429);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  expect(response.headers.get('retry-after')).toBe('2');
+  expect(response.headers.get('content-type')).toContain('application/json');
+});
+
 test('/v1 never accepts the administrator bearer token or cookie as an API key', async () => {
   const f = setup();
   expect((await f.request('/v1/models', { headers: ADMIN_HEADER })).status).toBe(401);
   expect((await f.request('/v1/models', { headers: { 'x-api-key': ADMIN } })).status).toBe(401);
-  expect((await f.request('/v1/models', { headers: { cookie: issueCookie(ADMIN).split(';')[0] } })).status).toBe(401);
+  const cookie = { cookie: issueCookie(ADMIN).split(';')[0] };
+  expect((await f.request('/v1/models', { headers: cookie })).status).toBe(401);
 });
 
-test('anything else is the console asset, and a missing console is 404', async () => {
+test('anything else is the console asset for GET and HEAD only, and a missing console is 404', async () => {
   const f = setup();
   expect((await f.request('/providers')).status).toBe(404);
   fs.mkdirSync(f.webDistDir, { recursive: true });
@@ -297,6 +353,11 @@ test('anything else is the console asset, and a missing console is 404', async (
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toContain('text/html');
   expect(await response.text()).toContain('console');
+  const head = await f.request('/providers', { method: 'HEAD' });
+  expect(head.status).toBe(200);
+  const posted = await f.request('/providers', { method: 'POST' });
+  expect(posted.status).toBe(404);
+  expect(await posted.json()).toEqual({ error: '未找到' });
 });
 
 test('the server disables Bun idle timeout so a slow model is not cut at 255 s', () => {
@@ -310,4 +371,24 @@ test('closing the app closes the one database', async () => {
   await f.app.close();
   await f.app.close();
   expect(files().filter((name) => name.endsWith('-wal') || name.endsWith('-shm'))).toEqual([]);
+});
+
+test('closing the app ends the connection to a registered node', async () => {
+  const daemon = new FakeDaemon();
+  daemon.start();
+  try {
+    const f = setup();
+    const registered = await authorized(f, '/api/gateway/nodes', post({ name: 'machine', url: daemon.url }));
+    expect(registered.status).toBe(201);
+    await until('the node to be online', () => daemon.openStreams === 1);
+    // Registration and the link's own handshake both asked for the identity.
+    const handshakes = daemon.identityRequests.length;
+    await f.app.close();
+    // The stub daemon sees its event-stream response cancelled, and the handshake does not run
+    // again: NodeLink.stop() awaits the connection loop, so no retry can start after close().
+    await until('the node stream to end', () => daemon.openStreams === 0);
+    expect(daemon.identityRequests).toHaveLength(handshakes);
+  } finally {
+    await daemon.stop();
+  }
 });

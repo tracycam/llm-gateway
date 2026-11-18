@@ -82,8 +82,9 @@ function clientProtocol(req: Request): Protocol {
 
 /** The inference API's 404 for a path no handler serves. */
 function notFoundV1(req: Request): Response {
+  const route = `${req.method} ${new URL(req.url).pathname}`;
   return Response.json(
-    protocolModule(clientProtocol(req)).errorBody(404, `Unsupported route: ${req.method} ${new URL(req.url).pathname}`),
+    protocolModule(clientProtocol(req)).errorBody(404, `Unsupported route: ${route}`),
     { status: 404 }
   );
 }
@@ -100,7 +101,12 @@ function modelName(raw: string): string | null {
 }
 
 /** The inference API under `/v1`: models, Chat Completions and Messages. */
-async function inferenceRoute(req: Request, pathname: string, deps: InferenceDeps, models: ModelListDeps): Promise<Response> {
+async function inferenceRoute(
+  req: Request,
+  pathname: string,
+  deps: InferenceDeps,
+  models: ModelListDeps,
+): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (pathname === '/v1/chat/completions' && req.method === 'POST') {
     return withCors(await handleInference(req, 'chat', deps));
@@ -108,7 +114,9 @@ async function inferenceRoute(req: Request, pathname: string, deps: InferenceDep
   if (pathname === '/v1/messages' && req.method === 'POST') {
     return withCors(await handleInference(req, 'messages', deps));
   }
-  if (pathname === '/v1/models' && req.method === 'GET') return withCors(handleModelList(req, { ...models, now: deps.now }));
+  if (pathname === '/v1/models' && req.method === 'GET') {
+    return withCors(handleModelList(req, { ...models, now: deps.now }));
+  }
   if (pathname.startsWith('/v1/models/') && req.method === 'GET') {
     const name = modelName(pathname.slice('/v1/models/'.length));
     if (name === null) return withCors(notFoundV1(req));
@@ -164,7 +172,9 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     if (session) return session;
 
     if (pathname.startsWith('/v1/')) {
-      return inferenceRoute(req, pathname, inference, { models, providers, keys, connector: options.connector });
+      return inferenceRoute(req, pathname, inference, {
+        models, providers, keys, connector: options.connector,
+      });
     }
 
     if (pathname.startsWith('/api/')) {
