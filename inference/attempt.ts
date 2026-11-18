@@ -83,6 +83,10 @@ function requestHeaders(input: AttemptInput, target: UpstreamTarget, stream: boo
       if (value !== null) headers.set(name, value);
     }
   }
+  for (const name of input.connector.clientHeaders ?? []) {
+    const value = input.clientHeaders.get(name);
+    if (value !== null) headers.set(name, value);
+  }
   return headers;
 }
 

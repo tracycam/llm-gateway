@@ -48,6 +48,11 @@ export interface Connector {
   defaultBaseUrl: string | null;
   credential: CredentialKind;
   /**
+   * Request headers of the client that this upstream wants passed on. One the client sent
+   * replaces the header of the same name from `target`; one it did not send changes nothing.
+   */
+  clientHeaders?: readonly string[];
+  /**
    * Where a request for `upstreamModel` goes. `inbound` is the protocol the client used: a
    * connector whose upstream speaks several protocols for this model picks that one, so the
    * request can be passed through untouched.

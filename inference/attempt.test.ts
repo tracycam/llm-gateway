@@ -119,6 +119,53 @@ test('rule 4: fetch failure preserves and redacts cause; aborted fetch is abando
   expect(await attempt(req)).toEqual({ kind: 'abandoned' });
 });
 
+test('rule 12: a declared client header replaces the target header', async () => {
+  const s = stub(() => new Response('{}'));
+  try {
+    const req = input(s.server.url.href);
+    req.connector.clientHeaders = ['x-opencode-session'];
+    req.clientHeaders = new Headers({ 'x-opencode-session': 'from-client' });
+    req.connector.target = async () => ({ url: s.server.url.href, protocol: 'chat',
+      headers: { authorization: 'Bearer secret-key', 'x-opencode-session': 'fallback' } });
+    await attempt(req);
+    expect(s.requests[0].headers.get('x-opencode-session')).toBe('from-client');
+  } finally { s.server.stop(true); }
+});
+
+test('rule 13: a declared header the client did not send keeps the target value', async () => {
+  const s = stub(() => new Response('{}'));
+  try {
+    const req = input(s.server.url.href);
+    req.connector.clientHeaders = ['x-opencode-session'];
+    req.connector.target = async () => ({ url: s.server.url.href, protocol: 'chat',
+      headers: { authorization: 'Bearer secret-key', 'x-opencode-session': 'fallback' } });
+    await attempt(req);
+    expect(s.requests[0].headers.get('x-opencode-session')).toBe('fallback');
+  } finally { s.server.stop(true); }
+});
+
+test('rule 14: an undeclared client header is not passed on', async () => {
+  const s = stub(() => new Response('{}'));
+  try {
+    const req = input(s.server.url.href);
+    req.connector.clientHeaders = ['x-declared'];
+    req.clientHeaders = new Headers({ 'x-opencode-session': 'from-client' });
+    await attempt(req);
+    expect(s.requests[0].headers.get('x-opencode-session')).toBeNull();
+  } finally { s.server.stop(true); }
+});
+
+test('rule 15: a connector without clientHeaders is unchanged', async () => {
+  const s = stub(() => new Response('{}'));
+  try {
+    const req = input(s.server.url.href);
+    req.clientHeaders = new Headers({ 'x-opencode-session': 'from-client' });
+    await attempt(req);
+    expect(s.requests[0].headers.get('x-opencode-session')).toBeNull();
+    expect(s.requests[0].headers.get('authorization')).toBe('Bearer secret-key');
+  } finally { s.server.stop(true); }
+});
+
 test('rule 5: redirects fail and are not followed', async () => {
   const destination = stub(() => new Response('{}'));
   const s = stub(() => new Response(null, {
