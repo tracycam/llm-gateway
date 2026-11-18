@@ -10,6 +10,7 @@ import { handleAnthropicMessages } from './anthropicAdapter';
 import { Cluster } from './cluster';
 import { migrateGatewayDataDir } from './dataDir';
 import { openNodeEvents } from './nodeEvents';
+import { handleNodeRoute, NODES_PATH } from './nodeRoutes';
 import { NodeStore } from './nodeStore';
 import { GatewayKeyRecord, GatewayStore } from './store';
 
@@ -258,6 +259,9 @@ const server = Bun.serve({
     if (session) return session;
     if (pathname.startsWith('/api/') && !isAuthorized(req)) return errorResponse('未登录', 401);
     if (pathname === '/api/gateway/events' && req.method === 'GET') return openNodeEvents(req, cluster);
+    if (pathname === NODES_PATH || pathname.startsWith(`${NODES_PATH}/`)) {
+      return handleNodeRoute(req, cluster, nodeStore);
+    }
     if (pathname.startsWith('/v1/') && req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }

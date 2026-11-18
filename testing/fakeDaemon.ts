@@ -26,6 +26,8 @@ export class FakeDaemon {
   public identity: NodeIdentity = { nodeId: 'node-a', hostname: 'host-a', version: '0', apiVersion: 1 };
   /** What the identity route answers instead of the identity, when set. */
   public identityBody: unknown = undefined;
+  /** Identity requests are answered only once this resolves, when set. */
+  public identityGate: Promise<void> | null = null;
   public token: string | null = null;
   /** HTTP status forced on both routes, when set. */
   public failWith: number | null = null;
@@ -86,7 +88,7 @@ export class FakeDaemon {
     this.streams.clear();
   }
 
-  private handle(req: Request): Response {
+  private handle(req: Request): Response | Promise<Response> {
     const { pathname } = new URL(req.url);
     const authorization = req.headers.get('authorization');
     this.authorizations.push(authorization);
@@ -97,7 +99,8 @@ export class FakeDaemon {
 
     if (pathname === '/api/v1/node') {
       this.identityRequests.push(performance.now());
-      return Response.json(this.identityBody === undefined ? this.identity : this.identityBody);
+      const answer = () => Response.json(this.identityBody === undefined ? this.identity : this.identityBody);
+      return this.identityGate === null ? answer() : this.identityGate.then(answer);
     }
     if (pathname === '/api/v1/events') {
       const stream = {} as Stream;
