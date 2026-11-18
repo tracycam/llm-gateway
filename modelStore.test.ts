@@ -51,7 +51,7 @@ test('duplicate model name is refused', () => {
 test('publish creates a model with discovered price and context', () => {
   const { db, models, providers, provider } = setup();
   try {
-    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: 123, price }], now);
+    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: 123, maxOutputTokens: null, price }], now);
     const route = models.publish(provider.id, 'up', now);
     expect(models.get(route.modelId)).toMatchObject({ name: 'up', price, contextLength: 123 });
   } finally {
@@ -63,7 +63,7 @@ test('publish attaches same-name model without overwriting price or context', ()
   const { db, models, providers, provider } = setup();
   try {
     const original = models.create({ name: 'up', price, contextLength: 50 }, now);
-    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: 123, price: { ...price, input: 99 } }], now);
+    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: 123, maxOutputTokens: null, price: { ...price, input: 99 } }], now);
     expect(models.publish(provider.id, 'up', now).modelId).toBe(original.id);
     expect(models.get(original.id)).toMatchObject({ price, contextLength: 50 });
   } finally {
@@ -74,7 +74,7 @@ test('publish attaches same-name model without overwriting price or context', ()
 test('publish twice returns the existing route', () => {
   const { db, models, providers, provider } = setup();
   try {
-    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: null, price }], now);
+    providers.replaceModels(provider.id, [{ upstreamId: 'up', contextLength: null, maxOutputTokens: null, price }], now);
     const first = models.publish(provider.id, 'up', now);
     expect(models.publish(provider.id, 'up', now)).toEqual(first);
     expect(models.get(first.modelId)?.routes).toHaveLength(1);

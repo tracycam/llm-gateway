@@ -135,6 +135,7 @@ export function migrate(db: Database): void {
           provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
           upstream_id TEXT NOT NULL,
           context_length INTEGER,
+          max_output_tokens INTEGER,
           input_price REAL,
           output_price REAL,
           cache_read_price REAL,

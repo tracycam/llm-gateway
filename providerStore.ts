@@ -14,9 +14,13 @@ export interface ProviderRecord {
   createdAt: string;
 }
 
+/** A model as its provider describes it. Null is "the provider did not say". */
 export interface ProviderModel {
   upstreamId: string;
   contextLength: number | null;
+  /** The longest answer the model gives. */
+  maxOutputTokens: number | null;
+  /** USD per 1M tokens. */
   price: Price;
   fetchedAt: string;
 }
@@ -48,6 +52,7 @@ interface ProviderRow {
 interface ProviderModelRow {
   upstream_id: string;
   context_length: number | null;
+  max_output_tokens: number | null;
   input_price: number | null;
   output_price: number | null;
   cache_read_price: number | null;
@@ -121,11 +126,11 @@ export class ProviderStore {
     this.db.transaction(() => {
       this.db.query('DELETE FROM provider_models WHERE provider_id = ?').run(id);
       const insert = this.db.query(`INSERT INTO provider_models (provider_id, upstream_id, context_length,
-        input_price, output_price, cache_read_price, cache_write_price, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        max_output_tokens, input_price, output_price, cache_read_price, cache_write_price, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const model of models) {
-        insert.run(id, model.upstreamId, model.contextLength, model.price.input, model.price.output,
-          model.price.cacheRead, model.price.cacheWrite, now.toISOString());
+        insert.run(id, model.upstreamId, model.contextLength, model.maxOutputTokens, model.price.input,
+          model.price.output, model.price.cacheRead, model.price.cacheWrite, now.toISOString());
       }
     })();
   }
@@ -137,6 +142,7 @@ export class ProviderStore {
       .all(id).map((row) => ({
         upstreamId: row.upstream_id,
         contextLength: row.context_length,
+        maxOutputTokens: row.max_output_tokens,
         price: {
           input: row.input_price,
           output: row.output_price,
