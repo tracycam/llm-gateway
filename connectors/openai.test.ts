@@ -138,7 +138,7 @@ test('context aliases are parsed and invalid ids skipped', async () => {
   expect(models.map((m) => m.contextLength)).toEqual([100, 200, 300, null]);
   expect(models[0]).toEqual({
     upstreamId: 'a', contextLength: 100, maxOutputTokens: null,
-    price: { input: null, output: null, cacheRead: null },
+    price: { input: null, output: null, cacheRead: null }, protocols: null,
   });
 });
 
@@ -152,7 +152,7 @@ test('OpenRouter converts per-token prices, including free, dynamic and invalid 
   const models = await openrouter.models(provider(base));
   expect(models[0]).toEqual({
     upstreamId: 'model', contextLength: 128000, maxOutputTokens: 4096,
-    price: { input: 8, output: 2.5, cacheRead: 0 },
+    price: { input: 8, output: 2.5, cacheRead: 0 }, protocols: null,
   });
   expect(models[1]?.price).toEqual({ input: null, output: null, cacheRead: null });
 });
@@ -166,7 +166,7 @@ test('xAI converts cents per 100 million tokens and leaves missing prices unknow
   const models = await xai.models(provider(base));
   expect(models[0]).toEqual({
     upstreamId: 'grok', contextLength: 131072, maxOutputTokens: null,
-    price: { input: 2, output: 5, cacheRead: 0.5 },
+    price: { input: 2, output: 5, cacheRead: 0.5 }, protocols: null,
   });
   expect(models[1]?.price.input).toBeNull();
 });
@@ -313,6 +313,7 @@ test('a realistic model list is parsed', async () => {
     contextLength: 8192,
     maxOutputTokens: null,
     price: { input: null, output: null, cacheRead: null },
+    protocols: null,
   }]);
 });
 
@@ -373,5 +374,12 @@ for (const connector of [openaiCompatible, anthropicCompatible]) {
       expect((error as Error).message).not.toContain('secret-key');
       expect((error as Error).message).toContain('[redacted]');
     }
+  });
+}
+
+for (const connector of [openaiCompatible, openrouter, xai]) {
+  test(`${connector.id} does not say which protocols its models speak`, async () => {
+    const base = stub(() => Response.json({ data: [{ id: 'model' }] }));
+    expect((await connector.models(provider(base)))[0]?.protocols).toBeNull();
   });
 }

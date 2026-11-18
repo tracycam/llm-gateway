@@ -84,14 +84,16 @@ export function openVersion3Database(): Database {
 }
 
 /**
- * An empty in-memory version-4 database. Version 5 renames connector ids in rows only and
- * version 6 adds a column, so the migration is run to build the rest of the schema, then the
- * version-6 column is dropped and the version is set back to 4.
+ * An empty in-memory version-4 database. Versions 5 to 7 change rows or add columns only, so the
+ * migration is run to build the rest of the schema, then the later columns are dropped and the
+ * version is set back to 4.
  */
 export function openVersion4Database(): Database {
   const db = openVersion3Database();
   migrate(db);
-  db.exec('ALTER TABLE providers DROP COLUMN credential_rejected; PRAGMA user_version = 4;');
+  db.exec(`ALTER TABLE providers DROP COLUMN credential_rejected;
+    ALTER TABLE provider_models DROP COLUMN protocols;
+    PRAGMA user_version = 4;`);
   return db;
 }
 
@@ -99,6 +101,17 @@ export function openVersion4Database(): Database {
 export function openVersion5Database(): Database {
   const db = openVersion4Database();
   db.exec('PRAGMA user_version = 5');
+  return db;
+}
+
+/**
+ * An empty in-memory version-6 database: the version-5 schema with the refused-credential mark
+ * and without the per-model protocols version 7 adds.
+ */
+export function openVersion6Database(): Database {
+  const db = openVersion4Database();
+  db.exec(`ALTER TABLE providers ADD COLUMN credential_rejected INTEGER NOT NULL DEFAULT 0;
+    PRAGMA user_version = 6`);
   return db;
 }
 

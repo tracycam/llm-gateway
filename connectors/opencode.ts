@@ -54,6 +54,7 @@ function opencodeModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'>
       output: priceOf(output.price),
       cacheRead: priceOf(cache.read),
     },
+    protocols: null,
   };
 }
 

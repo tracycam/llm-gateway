@@ -1,13 +1,15 @@
 // What the gateway needs to know about an upstream wire protocol to pass a response on:
 // which frames carry content, where the usage is, and how an error looks.
+import type { Protocol } from '../../protocol/gatewayApi';
 import type { Usage } from '../pricing';
 import type { SseFrame } from './sse';
 import { chat } from './chat';
 import { messages } from './messages';
 import { responses } from './responses';
 
-/** An upstream inference wire protocol. */
-export type Protocol = 'chat' | 'messages' | 'responses';
+// `Protocol` crosses the management API as `ProviderModel.protocols`;
+// protocol/gatewayApi.ts defines it once.
+export type { Protocol };
 /** What a frame of an upstream response stream is to the gateway. */
 export type FrameKind =
   /** Nothing the model produced yet; held back until content follows. */

@@ -1,7 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import { StoreRefusal } from './schema';
-import type { ProviderPatchBody, ProviderRecord, ProviderModel } from '../protocol/gatewayApi';
+import type { Protocol, ProviderPatchBody, ProviderRecord, ProviderModel } from '../protocol/gatewayApi';
+import { parseJson } from './protocols/json';
 
 // `ProviderRecord` and `ProviderModel` cross the management API; protocol/gatewayApi.ts defines
 // them once.
@@ -39,7 +40,27 @@ interface ProviderModelRow {
   input_price: number | null;
   output_price: number | null;
   cache_read_price: number | null;
+  protocols: string | null;
   fetched_at: string;
+}
+
+/** Whether a stored value names a protocol the gateway speaks. */
+function isProtocol(value: unknown): value is Protocol {
+  return value === 'chat' || value === 'messages' || value === 'responses';
+}
+
+/**
+ * The protocols a stored row names; null is "the provider did not say". Text that is not a JSON
+ * array of the gateway's protocols is a corrupt row: it fails loudly rather than passing for a
+ * provider that said nothing.
+ */
+function storedProtocols(
+  text: string | null, providerId: string, upstreamId: string,
+): Protocol[] | null {
+  if (text === null) return null;
+  const value: unknown = parseJson(text);
+  if (Array.isArray(value) && value.every(isProtocol)) return value;
+  throw new Error(`Corrupt protocols for provider ${providerId} model ${upstreamId}: ${text}`);
 }
 
 const selectProvider = `SELECT id, name, connector, base_url, enabled, auto_publish,
@@ -125,11 +146,12 @@ export class ProviderStore {
     this.db.transaction(() => {
       this.db.query('DELETE FROM provider_models WHERE provider_id = ?').run(id);
       const insert = this.db.query(`INSERT INTO provider_models (provider_id, upstream_id, context_length,
-        max_output_tokens, input_price, output_price, cache_read_price, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+        max_output_tokens, input_price, output_price, cache_read_price, protocols, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const model of models) {
         insert.run(id, model.upstreamId, model.contextLength, model.maxOutputTokens, model.price.input,
-          model.price.output, model.price.cacheRead, now.toISOString());
+          model.price.output, model.price.cacheRead,
+          model.protocols === null ? null : JSON.stringify(model.protocols), now.toISOString());
       }
     })();
   }
@@ -147,6 +169,7 @@ export class ProviderStore {
           output: row.output_price,
           cacheRead: row.cache_read_price,
         },
+        protocols: storedProtocols(row.protocols, id, row.upstream_id),
         fetchedAt: row.fetched_at,
       }));
   }

@@ -39,6 +39,7 @@ export function fixture(): {
         contextLength: 100,
         maxOutputTokens: null,
         price: { input: null, output: null, cacheRead: null },
+        protocols: null,
       }];
     },
   };

@@ -43,6 +43,7 @@ async function modelsPage(provider: ProviderAccess, after: string | null): Promi
       contextLength: positiveNumber(item.max_input_tokens),
       maxOutputTokens: positiveNumber(item.max_tokens),
       price: { input: null, output: null, cacheRead: null },
+      protocols: null,
     });
   }
   if (!body.has_more) return { models, next: null };

@@ -82,7 +82,7 @@ test('rule 2: refusal sends nothing; provider output limit is used', async () =>
     expect(s.requests).toHaveLength(0);
     req.body = { messages: [{ role: 'user', content: 'hi' }] };
     req.provider = { ...provider, model: () => ({ upstreamId: 'chosen', contextLength: null,
-      maxOutputTokens: 73, price: { input: null, output: null, cacheRead: null } }) };
+      maxOutputTokens: 73, price: { input: null, output: null, cacheRead: null }, protocols: null }) };
     await attempt(req);
     expect(JSON.parse(s.requests[0].body).max_tokens).toBe(73);
   } finally { s.server.stop(true); }
@@ -589,7 +589,7 @@ test('a Chat request is never sent to an upstream that speaks only Responses', a
   const s = stub(() => new Response(responsesBody));
   try {
     const req = input(s.server.url.href, 'chat', 'responses');
-    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocol: 'responses' });
+    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocols: ['responses'] });
     expect(s.requests).toHaveLength(0);
   } finally { s.server.stop(true); }
 });
@@ -598,7 +598,20 @@ test('a Responses request is never sent to an upstream that speaks only Chat', a
   const s = stub(() => new Response(complete('chat')));
   try {
     const req = input(s.server.url.href, 'responses', 'chat');
-    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocol: 'chat' });
+    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocols: ['chat'] });
     expect(s.requests).toHaveLength(0);
   } finally { s.server.stop(true); }
+});
+
+test('a model that speaks no interface is incompatible before its connector is asked', async () => {
+  const req = input('http://localhost');
+  let targets = 0;
+  req.connector.target = async () => {
+    targets += 1;
+    return { url: 'http://localhost', protocol: 'chat', headers: {} };
+  };
+  req.provider = { ...provider, model: () => ({ upstreamId: 'chosen', contextLength: null,
+    maxOutputTokens: null, price: { input: null, output: null, cacheRead: null }, protocols: [] }) };
+  expect(await attempt(req)).toEqual({ kind: 'incompatible', protocols: [] });
+  expect(targets).toBe(0);
 });

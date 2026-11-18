@@ -282,11 +282,11 @@ const modelList = {
 
 const expectedModels = [
   { upstreamId: 'glm-5.3', contextLength: 204800, maxOutputTokens: 131072,
-    price: { input: 0.6, output: 2.2, cacheRead: 0.06 } },
+    price: { input: 0.6, output: 2.2, cacheRead: 0.06 }, protocols: null },
   { upstreamId: 'free-model', contextLength: 16384, maxOutputTokens: 4096,
-    price: { input: 0, output: 0, cacheRead: null } },
+    price: { input: 0, output: 0, cacheRead: null }, protocols: null },
   { upstreamId: 'go-model', contextLength: 128000, maxOutputTokens: 16384,
-    price: { input: 0.3, output: 1.2, cacheRead: 0.03 } },
+    price: { input: 0.3, output: 1.2, cacheRead: 0.03 }, protocols: null },
 ];
 
 for (const preset of presets) {
@@ -319,6 +319,7 @@ for (const preset of presets) {
       contextLength: null,
       maxOutputTokens: null,
       price: { input: null, output: null, cacheRead: null },
+      protocols: null,
     }]);
   });
 
@@ -334,6 +335,7 @@ for (const preset of presets) {
       contextLength: null,
       maxOutputTokens: null,
       price: { input: null, output: null, cacheRead: null },
+      protocols: null,
     }]);
   });
 
@@ -462,5 +464,12 @@ for (const preset of presets) {
     await attempt(attemptInput(preset, s.base, 'chat', chatBody, headers));
     expect(s.requests[0]?.headers.get('authorization')).toBe(`Bearer ${KEY}`);
     expect(s.requests[0]?.headers.get('cookie')).toBeNull();
+  });
+}
+
+for (const preset of presets) {
+  test(`${preset.id} does not say which protocols its models speak`, async () => {
+    const s = stub(() => Response.json({ data: [{ id: 'model', type: 'chat' }] }));
+    expect((await preset.connector.models(access(preset, s.base)))[0]?.protocols).toBeNull();
   });
 }

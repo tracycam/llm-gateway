@@ -33,6 +33,7 @@ test('credentials, refresh failure, publication and input validation', async () 
         contextLength: null,
         maxOutputTokens: null,
         price: { input: null, output: null, cacheRead: null },
+        protocols: null,
       }];
     },
   };
@@ -412,4 +413,23 @@ test('publish distinguishes unknown provider and upstream model', async () => {
   expect(await missingModel?.json()).toEqual({ error: '未找到提供商模型' });
   expect(deps.models.list()).toHaveLength(0);
   db.close();
+});
+
+test('the provider model list carries the protocols the provider said', async () => {
+  const { db, deps } = fixture();
+  try {
+    const created = deps.providers.create({
+      name: 'protocols', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+    }, deps.now());
+    deps.providers.replaceModels(created.id, [{
+      upstreamId: 'upstream', contextLength: null, maxOutputTokens: null,
+      price: { input: null, output: null, cacheRead: null }, protocols: ['responses', 'chat'],
+    }], deps.now());
+    const response = await handleProviderRoute(request(`/providers/${created.id}/models`), deps);
+    const body = JSON.parse(await response!.text());
+    expect(body.models).toHaveLength(1);
+    expect(body.models[0].protocols).toEqual(['responses', 'chat']);
+  } finally {
+    db.close();
+  }
 });

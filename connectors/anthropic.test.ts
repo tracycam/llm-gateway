@@ -97,9 +97,9 @@ test('pagination requests after_id and parses model limits without prices', asyn
   const models = await anthropicCompatible.models(provider(base));
   expect(models).toEqual([
     { upstreamId: 'one', contextLength: 200000, maxOutputTokens: 8192,
-      price: { input: null, output: null, cacheRead: null } },
+      price: { input: null, output: null, cacheRead: null }, protocols: null },
     { upstreamId: 'two', contextLength: null, maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null } },
+      price: { input: null, output: null, cacheRead: null }, protocols: null },
   ]);
   expect(requests.length).toBe(2);
   expect(requests[0]?.method).toBe('GET');
@@ -162,4 +162,9 @@ test('the target sends x-api-key', async () => {
   const base = stub(() => new Response());
   const target = await anthropicCompatible.target(provider(base), 'm', 'chat');
   expect(target.headers['x-api-key']).toBe('secret');
+});
+
+test('anthropic-compatible does not say which protocols its models speak', async () => {
+  const base = stub(() => Response.json({ data: [{ id: 'model' }], has_more: false }));
+  expect((await anthropicCompatible.models(provider(base)))[0]?.protocols).toBeNull();
 });

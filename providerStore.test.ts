@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import type { Protocol } from '../protocol/gatewayApi';
 import { migrate, StoreRefusal } from './schema';
 import { ProviderStore } from './providerStore';
 
@@ -87,7 +88,7 @@ test('replacing discovered models is atomic', () => {
     const provider = store.create(input, now);
     const model = {
       upstreamId: 'm', contextLength: 1024, maxOutputTokens: 512,
-      price: { input: 1, output: 2, cacheRead: 0 },
+      price: { input: 1, output: 2, cacheRead: 0 }, protocols: null,
     };
     store.replaceModels(provider.id, [model], now);
     expect(store.models(provider.id)).toEqual([{ ...model, fetchedAt: now.toISOString() }]);
@@ -95,6 +96,62 @@ test('replacing discovered models is atomic', () => {
     expect(store.models(provider.id)).toHaveLength(1);
     store.replaceModels(provider.id, [], now);
     expect(store.models(provider.id)).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+/** One discovered model with `protocols`, as the store reads it back. */
+function protocolsRoundTrip(protocols: Protocol[] | null): Protocol[] | null {
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    const store = new ProviderStore(db);
+    const provider = store.create(input, now);
+    store.replaceModels(provider.id, [{
+      upstreamId: 'm', contextLength: null, maxOutputTokens: null,
+      price: { input: null, output: null, cacheRead: null }, protocols,
+    }], now);
+    return store.models(provider.id)[0].protocols;
+  } finally {
+    db.close();
+  }
+}
+
+test('a model whose provider said nothing about protocols reads back as null', () => {
+  expect(protocolsRoundTrip(null)).toBeNull();
+});
+
+test('one protocol reads back as it was stored', () => {
+  expect(protocolsRoundTrip(['messages'])).toEqual(['messages']);
+});
+
+test('several protocols read back as they were stored', () => {
+  expect(protocolsRoundTrip(['chat', 'messages', 'responses']))
+    .toEqual(['chat', 'messages', 'responses']);
+});
+
+test('an empty list reads back as an empty list, not as "not said"', () => {
+  expect(protocolsRoundTrip([])).toEqual([]);
+});
+
+test('the store keeps the protocols in the order the provider gave them', () => {
+  expect(protocolsRoundTrip(['responses', 'chat'])).toEqual(['responses', 'chat']);
+});
+
+test('a protocols text that is not a list of known protocols fails loudly', () => {
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    const store = new ProviderStore(db);
+    const provider = store.create(input, now);
+    for (const text of ['"chat"', '{}', '["chat","grpc"]']) {
+      db.query('DELETE FROM provider_models').run();
+      db.query(`INSERT INTO provider_models (provider_id, upstream_id, protocols, fetched_at)
+        VALUES (?, 'bad', ?, 'now')`).run(provider.id, text);
+      expect(() => store.models(provider.id))
+        .toThrow(`Corrupt protocols for provider ${provider.id} model bad`);
+    }
   } finally {
     db.close();
   }

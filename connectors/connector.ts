@@ -126,6 +126,22 @@ export interface LoginConnector extends ConnectorBase {
 /** One kind of upstream. Which credential kind it has decides whether it can log in. */
 export type Connector = KeyConnector | LoginConnector;
 
+/**
+ * The protocol to use for a request: the client's own when the model speaks it (so the request
+ * passes through untouched), else the model's first — which the caller may then be unable to
+ * serve, and the request is skipped as incompatible. Null `protocols` → `fallback`.
+ *
+ * `protocols` is a non-empty list or null: `attempt` answers a model that says it speaks none
+ * before a connector is asked, so an empty list cannot come through. Should one reach here
+ * anyway, nothing can be computed from it and `fallback` applies.
+ */
+export function protocolFor(
+  protocols: Protocol[] | null, inbound: Protocol, fallback: Protocol,
+): Protocol {
+  if (protocols === null || protocols.length === 0) return fallback;
+  return protocols.includes(inbound) ? inbound : protocols[0];
+}
+
 /** A failure of the upstream that a connector reports in words fit to show. */
 export class UpstreamFailure extends Error {
   constructor(

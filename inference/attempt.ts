@@ -44,8 +44,13 @@ export type AttemptResult =
   | { kind: 'stream'; body: ReadableStream<Uint8Array>; finished: Promise<Finished> }
   /** The request cannot be expressed in this route's protocol. Nothing was sent upstream. */
   | { kind: 'refused'; message: string; param: string }
-  /** This route speaks a protocol that cannot be bridged to the client's; nothing was sent. */
-  | { kind: 'incompatible'; protocol: Protocol }
+  /**
+   * This route cannot serve the client's protocol: either the model speaks none of the gateway's
+   * interfaces, or the one its connector chose cannot be bridged to the client's. `protocols` is
+   * what the provider said the model speaks, or the protocol the route chose when it said
+   * nothing; empty when the model speaks none. Nothing was sent upstream.
+   */
+  | { kind: 'incompatible'; protocols: Protocol[] }
   /** The upstream says the request itself is at fault. `body` is for the client. */
   | { kind: 'rejected'; status: number; body: string }
   /** This route could not serve the request; another one may. Nothing reached the client. */
@@ -166,6 +171,10 @@ async function answer(
 
 /** Attempt one request against one provider route. */
 export async function attempt(input: AttemptInput): Promise<AttemptResult> {
+  const known = input.provider.model(input.upstreamModel);
+  // A model that speaks none of the gateway's interfaces cannot serve any request, so where a
+  // request for it would go is never asked: no target, no fetch, no credential renewal.
+  if (known?.protocols?.length === 0) return { kind: 'incompatible', protocols: [] };
   let target: UpstreamTarget;
   try {
     target = await input.connector.target(input.provider, input.upstreamModel, input.inbound);
@@ -183,13 +192,13 @@ export async function attempt(input: AttemptInput): Promise<AttemptResult> {
   // The Responses API is passed through in both directions and never translated: a route that
   // speaks a different protocol with it on either side cannot serve this request.
   if (!canServe(input.inbound, target.protocol)) {
-    return { kind: 'incompatible', protocol: target.protocol };
+    return { kind: 'incompatible', protocols: known?.protocols ?? [target.protocol] };
   }
   const bridge: Bridge = {
     inbound: input.inbound,
     upstream: target.protocol,
     upstreamModel: input.upstreamModel,
-    maxOutputTokens: input.provider.model(input.upstreamModel)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: known?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
     created: Math.floor(input.now() / 1000),
   };
   const request = bridgeRequest(input.body, bridge);

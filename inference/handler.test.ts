@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Admission, QueueFull } from '../admission';
-import type { Connector } from '../connectors/connector';
+import { protocolFor, type Connector, type ProviderAccess } from '../connectors/connector';
 import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore, type KeyInput } from '../keyStore';
 import { ModelStore } from '../modelStore';
@@ -14,6 +14,7 @@ import { Router } from '../router';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
 import type { AttemptInput, AttemptResult } from './attempt';
+import { attempt } from './attempt';
 import { handleInference, MAX_WAITING_PER_KEY, type InferenceDeps } from './handler';
 
 const price = { input: 1, output: 2, cacheRead: null };

@@ -244,12 +244,15 @@ function entryPath(protocol: Protocol): string {
 /**
  * The 400 for a request whose model has no route it can be passed through to: the Responses API
  * is served by passthrough only, so a client of it needs a route that speaks it, and a Chat or
- * Messages request needs a route that is not Responses. Names the interface the model has.
+ * Messages request needs a route that is not Responses. Names the interface the model has; a
+ * model that says it speaks none names none.
  */
-function incompatibleResponse(ctx: Context, skipped: Protocol[]): Response {
-  const entries = [...new Set(skipped)].map(entryPath);
-  const message = `Model "${ctx.model.name}" is not available on ${entryPath(ctx.inbound)};` +
-    ` use ${entries.join(' or ')}`;
+function incompatibleResponse(ctx: Context, skipped: Protocol[][]): Response {
+  const entries = [...new Set(skipped.flat())].map(entryPath);
+  const message = entries.length === 0
+    ? `Model "${ctx.model.name}" is not available on this gateway's interfaces`
+    : `Model "${ctx.model.name}" is not available on ${entryPath(ctx.inbound)};` +
+      ` use ${entries.join(' or ')}`;
   return errorResponse(ctx.inbound, 400, message);
 }
 
@@ -258,7 +261,7 @@ function serveExhausted(
   ctx: Context,
   failure: { result: Failed; route: UsableRoute } | null,
   refusal: Refused | null,
-  skipped: Protocol[],
+  skipped: Protocol[][],
 ): Served {
   if (failure) {
     const { result, route } = failure;
@@ -314,8 +317,11 @@ async function tryRoutes(ctx: Context): Promise<Served> {
   const tried = new Set<string>();
   let failure: { result: Failed; route: UsableRoute } | null = null;
   let refusal: Refused | null = null;
-  /** Protocols of the routes skipped because the request cannot be passed through to them. */
-  const skipped: Protocol[] = [];
+  /**
+   * Interfaces of each route skipped because the request cannot be passed through to it: what
+   * its provider said the model speaks, or empty when the model speaks none.
+   */
+  const skipped: Protocol[][] = [];
   const candidates: Candidate[] = ctx.routes.map(({ route }, order) => ({
     id: route.id,
     weight: route.weight,
@@ -337,7 +343,7 @@ async function tryRoutes(ctx: Context): Promise<Served> {
     tried.add(route.route.id);
     if (result.kind === 'abandoned') return served(errorResponse(ctx.inbound, 499, 'Client disconnected'));
     if (result.kind === 'incompatible') {
-      skipped.push(result.protocol);
+      skipped.push(result.protocols);
       continue;
     }
     if (result.kind === 'refused') {

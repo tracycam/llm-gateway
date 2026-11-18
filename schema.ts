@@ -166,7 +166,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 6) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 7) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -276,6 +276,17 @@ export function migrate(db: Database): void {
       db.exec(`
         ALTER TABLE providers ADD COLUMN credential_rejected INTEGER NOT NULL DEFAULT 0;
         PRAGMA user_version = 6;
+      `);
+    })();
+  }
+
+  // Version 7 remembers, per discovered model, the interfaces its provider says it speaks. A
+  // NULL column is "the provider did not say"; existing rows said nothing.
+  if (version < 7) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE provider_models ADD COLUMN protocols TEXT;
+        PRAGMA user_version = 7;
       `);
     })();
   }

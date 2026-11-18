@@ -82,7 +82,9 @@ test('a model published from two providers lists the routes in publication order
   const { db, models, providers, provider } = setup();
   try {
     const other = addProvider(providers, 'other');
-    const published = [{ upstreamId: 'up', contextLength: null, maxOutputTokens: null, price }];
+    const published = [{
+      upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null,
+    }];
     providers.replaceModels(provider.id, published, now);
     providers.replaceModels(other.id, published, now);
     const first = models.publish(provider.id, 'up', now);
@@ -99,7 +101,7 @@ test('publish creates a model with discovered price and context', () => {
   const { db, models, providers, provider } = setup();
   try {
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: 123, maxOutputTokens: null, price },
+      { upstreamId: 'up', contextLength: 123, maxOutputTokens: null, price, protocols: null },
     ], now);
     const route = models.publish(provider.id, 'up', now);
     expect(models.get(route.modelId)).toMatchObject({ name: 'up', price, contextLength: 123 });
@@ -112,7 +114,7 @@ test('the publish that creates the model gives the model the discovered price an
   const { db, models, providers, provider } = setup();
   try {
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
+      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null },
     ], now);
     const route = models.publish(provider.id, 'up', now);
     const model = models.get(route.modelId)!;
@@ -130,10 +132,11 @@ test('a publish that adds a route to an existing model gives the route its disco
   try {
     const other = addProvider(providers, 'other');
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
+      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null },
     ], now);
     providers.replaceModels(other.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: cheap },
+      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: cheap,
+        protocols: null },
     ], now);
     const first = models.publish(provider.id, 'up', now);
     const second = models.publish(other.id, 'up', now);
@@ -151,7 +154,9 @@ test('a route gets no price when the discovered price is the model price', () =>
   const { db, models, providers, provider } = setup();
   try {
     const other = addProvider(providers, 'other');
-    const published = [{ upstreamId: 'up', contextLength: null, maxOutputTokens: null, price }];
+    const published = [{
+      upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null,
+    }];
     providers.replaceModels(provider.id, published, now);
     providers.replaceModels(other.id, published, now);
     models.publish(provider.id, 'up', now);
@@ -172,10 +177,11 @@ for (const field of ['input', 'output', 'cacheRead'] as const) {
     try {
       const other = addProvider(providers, 'other');
       providers.replaceModels(provider.id, [
-        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
+        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null },
       ], now);
       providers.replaceModels(other.id, [
-        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: changed },
+        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: changed,
+          protocols: null },
       ], now);
       models.publish(provider.id, 'up', now);
       const second = models.publish(other.id, 'up', now);
@@ -198,7 +204,8 @@ test('a discovered price without input or output gives the route no price', () =
     for (const [index, partial] of partials.entries()) {
       const other = addProvider(providers, `other-${String(index)}`);
       providers.replaceModels(other.id, [
-        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: partial },
+        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: partial,
+          protocols: null },
       ], now);
       const route = models.publish(other.id, 'up', now);
       expect(route.price).toBeNull();
@@ -214,7 +221,8 @@ test('publish attaches same-name model without overwriting price or context', ()
   try {
     const original = models.create({ name: 'up', price, contextLength: 50 }, now);
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: 123, maxOutputTokens: null, price: { ...price, input: 99 } },
+      { upstreamId: 'up', contextLength: 123, maxOutputTokens: null,
+        price: { ...price, input: 99 }, protocols: null },
     ], now);
     expect(models.publish(provider.id, 'up', now).modelId).toBe(original.id);
     expect(models.get(original.id)).toMatchObject({ price, contextLength: 50 });
@@ -227,13 +235,14 @@ test('publish twice returns the existing route', () => {
   const { db, models, providers, provider } = setup();
   try {
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
+      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price, protocols: null },
     ], now);
     const first = models.publish(provider.id, 'up', now);
     // The upstream price may have moved since; publishing again still returns the route as stored.
     const moved = { input: 9, output: 10, cacheRead: null };
     providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: moved },
+      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: moved,
+        protocols: null },
     ], now);
     expect(models.publish(provider.id, 'up', now)).toEqual(first);
     expect(models.get(first.modelId)?.routes).toHaveLength(1);

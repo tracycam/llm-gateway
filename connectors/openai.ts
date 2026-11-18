@@ -44,6 +44,7 @@ function openaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
       ?? positiveNumber(item.max_model_len),
     maxOutputTokens: null,
     price: { ...NO_PRICE },
+    protocols: null,
   };
 }
 
@@ -58,6 +59,7 @@ function openrouterModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId
       output: usdPerTokenText(pricing.completion),
       cacheRead: usdPerTokenText(pricing.input_cache_read),
     },
+    protocols: null,
   };
 }
 
@@ -70,6 +72,7 @@ function xaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
       output: centsPer100M(item.completion_text_token_price),
       cacheRead: centsPer100M(item.cached_prompt_text_token_price),
     },
+    protocols: null,
   };
 }
 
