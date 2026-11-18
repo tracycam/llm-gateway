@@ -53,7 +53,6 @@ function opencodeModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'>
       input: priceOf(input.price),
       output: priceOf(output.price),
       cacheRead: priceOf(cache.read),
-      cacheWrite: priceOf(cache.write),
     },
   };
 }

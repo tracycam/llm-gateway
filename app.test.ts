@@ -117,7 +117,7 @@ function setup(options: SetupOptions = {}): Fixture {
   }, NOW);
   const model = models.create({
     name: 'stub-model',
-    price: { input: 1, output: 2, cacheRead: null, cacheWrite: null },
+    price: { input: 1, output: 2, cacheRead: null },
   }, NOW);
   models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'upstream-model' });
   const key = keys.create({ name: 'client key' }, NOW).token;

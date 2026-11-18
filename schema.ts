@@ -41,10 +41,132 @@ const keysDDL = `CREATE TABLE api_keys (
   created_at TEXT NOT NULL
 )`;
 
+/**
+ * The version-3 schema, frozen as the gateway wrote it. Version 4 starts from it, and the
+ * migration test builds a version-3 database from it rather than from the current schema.
+ */
+export const version3DDL = `
+CREATE TABLE IF NOT EXISTS nodes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  token TEXT,
+  node_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE providers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  connector TEXT NOT NULL,
+  base_url TEXT,
+  credential TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  auto_publish INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE provider_models (
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  upstream_id TEXT NOT NULL,
+  context_length INTEGER,
+  max_output_tokens INTEGER,
+  input_price REAL,
+  output_price REAL,
+  cache_read_price REAL,
+  cache_write_price REAL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY(provider_id, upstream_id)
+);
+CREATE TABLE models (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  input_price REAL,
+  output_price REAL,
+  cache_read_price REAL,
+  cache_write_price REAL,
+  context_length INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE routes (
+  id TEXT PRIMARY KEY,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  upstream_model TEXT NOT NULL,
+  weight INTEGER NOT NULL DEFAULT 1 CHECK(weight > 0),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  input_price REAL,
+  output_price REAL,
+  cache_read_price REAL,
+  cache_write_price REAL,
+  UNIQUE(model_id, provider_id, upstream_model)
+);
+ALTER TABLE api_keys ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE api_keys ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN cost_limit REAL;
+ALTER TABLE api_keys ADD COLUMN reset_period TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE api_keys ADD COLUMN period_start TEXT NOT NULL DEFAULT '';
+UPDATE api_keys SET period_start = created_at;
+ALTER TABLE api_keys ADD COLUMN period_cost REAL NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN total_cost REAL NOT NULL DEFAULT 0;
+ALTER TABLE api_keys ADD COLUMN max_concurrency INTEGER;
+ALTER TABLE api_keys ADD COLUMN expires_at TEXT;
+CREATE TABLE key_models (
+  key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  PRIMARY KEY(key_id, model_id)
+);
+CREATE TABLE usage_daily (
+  day TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  key_name TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  provider_name TEXT NOT NULL,
+  requests INTEGER NOT NULL,
+  errors INTEGER NOT NULL,
+  unknown_usage INTEGER NOT NULL,
+  uncosted INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  cache_read_tokens INTEGER NOT NULL,
+  cache_write_tokens INTEGER NOT NULL,
+  cost REAL NOT NULL,
+  PRIMARY KEY(day, key_id, model_id, provider_id)
+);
+ALTER TABLE request_logs RENAME TO request_logs_v2;
+CREATE TABLE request_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  key_name TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  provider_name TEXT,
+  upstream_model TEXT,
+  status INTEGER NOT NULL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  cost REAL,
+  ttft_ms REAL,
+  latency_ms REAL NOT NULL,
+  error TEXT
+);
+INSERT INTO request_logs (id, timestamp, protocol, key_name, model_name, status,
+  input_tokens, output_tokens, ttft_ms, latency_ms)
+  SELECT id, timestamp, protocol, key_name, model, status, prompt_tokens,
+    completion_tokens, ttft_ms, latency_ms FROM request_logs_v2;
+DROP TABLE request_logs_v2;
+DROP TABLE IF EXISTS gateway_config;
+ALTER TABLE gateway_totals ADD COLUMN cost REAL NOT NULL DEFAULT 0;
+PRAGMA user_version = 3;
+`;
+
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 3) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 4) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -112,122 +234,25 @@ export function migrate(db: Database): void {
   // Version 3 introduces providers, models, routes, key limits and daily usage.
   if (version < 3) {
     db.transaction(() => {
+      db.exec(version3DDL);
+    })();
+  }
+
+  // Version 4 makes cache-write tokens input and drops every cache-write price and count.
+  if (version < 4) {
+    db.transaction(() => {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS nodes (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          url TEXT NOT NULL,
-          token TEXT,
-          node_id TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE providers (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          connector TEXT NOT NULL,
-          base_url TEXT,
-          credential TEXT,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          auto_publish INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE provider_models (
-          provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-          upstream_id TEXT NOT NULL,
-          context_length INTEGER,
-          max_output_tokens INTEGER,
-          input_price REAL,
-          output_price REAL,
-          cache_read_price REAL,
-          cache_write_price REAL,
-          fetched_at TEXT NOT NULL,
-          PRIMARY KEY(provider_id, upstream_id)
-        );
-        CREATE TABLE models (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          input_price REAL,
-          output_price REAL,
-          cache_read_price REAL,
-          cache_write_price REAL,
-          context_length INTEGER,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE routes (
-          id TEXT PRIMARY KEY,
-          model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-          provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-          upstream_model TEXT NOT NULL,
-          weight INTEGER NOT NULL DEFAULT 1 CHECK(weight > 0),
-          enabled INTEGER NOT NULL DEFAULT 1,
-          input_price REAL,
-          output_price REAL,
-          cache_read_price REAL,
-          cache_write_price REAL,
-          UNIQUE(model_id, provider_id, upstream_model)
-        );
-        ALTER TABLE api_keys ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
-        ALTER TABLE api_keys ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE api_keys ADD COLUMN cost_limit REAL;
-        ALTER TABLE api_keys ADD COLUMN reset_period TEXT NOT NULL DEFAULT 'none';
-        ALTER TABLE api_keys ADD COLUMN period_start TEXT NOT NULL DEFAULT '';
-        UPDATE api_keys SET period_start = created_at;
-        ALTER TABLE api_keys ADD COLUMN period_cost REAL NOT NULL DEFAULT 0;
-        ALTER TABLE api_keys ADD COLUMN total_cost REAL NOT NULL DEFAULT 0;
-        ALTER TABLE api_keys ADD COLUMN max_concurrency INTEGER;
-        ALTER TABLE api_keys ADD COLUMN expires_at TEXT;
-        CREATE TABLE key_models (
-          key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-          model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-          PRIMARY KEY(key_id, model_id)
-        );
-        CREATE TABLE usage_daily (
-          day TEXT NOT NULL,
-          key_id TEXT NOT NULL,
-          key_name TEXT NOT NULL,
-          model_id TEXT NOT NULL,
-          model_name TEXT NOT NULL,
-          provider_id TEXT NOT NULL,
-          provider_name TEXT NOT NULL,
-          requests INTEGER NOT NULL,
-          errors INTEGER NOT NULL,
-          unknown_usage INTEGER NOT NULL,
-          uncosted INTEGER NOT NULL,
-          input_tokens INTEGER NOT NULL,
-          output_tokens INTEGER NOT NULL,
-          cache_read_tokens INTEGER NOT NULL,
-          cache_write_tokens INTEGER NOT NULL,
-          cost REAL NOT NULL,
-          PRIMARY KEY(day, key_id, model_id, provider_id)
-        );
-        ALTER TABLE request_logs RENAME TO request_logs_v2;
-        CREATE TABLE request_logs (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          timestamp TEXT NOT NULL,
-          protocol TEXT NOT NULL,
-          key_name TEXT NOT NULL,
-          model_name TEXT NOT NULL,
-          provider_name TEXT,
-          upstream_model TEXT,
-          status INTEGER NOT NULL,
-          input_tokens INTEGER,
-          output_tokens INTEGER,
-          cache_read_tokens INTEGER,
-          cache_write_tokens INTEGER,
-          cost REAL,
-          ttft_ms REAL,
-          latency_ms REAL NOT NULL,
-          error TEXT
-        );
-        INSERT INTO request_logs (id, timestamp, protocol, key_name, model_name, status,
-          input_tokens, output_tokens, ttft_ms, latency_ms)
-          SELECT id, timestamp, protocol, key_name, model, status, prompt_tokens,
-            completion_tokens, ttft_ms, latency_ms FROM request_logs_v2;
-        DROP TABLE request_logs_v2;
-        DROP TABLE IF EXISTS gateway_config;
-        ALTER TABLE gateway_totals ADD COLUMN cost REAL NOT NULL DEFAULT 0;
-        PRAGMA user_version = 3;
+        UPDATE usage_daily SET input_tokens = input_tokens + cache_write_tokens;
+        UPDATE request_logs SET input_tokens = input_tokens + cache_write_tokens
+          WHERE input_tokens IS NOT NULL AND cache_write_tokens IS NOT NULL;
+        UPDATE request_logs SET input_tokens = cache_write_tokens
+          WHERE input_tokens IS NULL AND cache_write_tokens IS NOT NULL;
+        ALTER TABLE usage_daily DROP COLUMN cache_write_tokens;
+        ALTER TABLE request_logs DROP COLUMN cache_write_tokens;
+        ALTER TABLE models DROP COLUMN cache_write_price;
+        ALTER TABLE routes DROP COLUMN cache_write_price;
+        ALTER TABLE provider_models DROP COLUMN cache_write_price;
+        PRAGMA user_version = 4;
       `);
     })();
   }

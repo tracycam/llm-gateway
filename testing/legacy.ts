@@ -1,7 +1,10 @@
-// Builds a gateway database exactly as the retired GatewayStore wrote version 2, so migration
-// tests start from the shape that exists in the field rather than from today's schema.
+// Builds gateway databases exactly as the retired GatewayStore wrote version 2, and a version-3
+// database on top of that shape, so migration tests start from what exists in the field rather
+// than from today's schema.
 import { createHash } from 'node:crypto';
+import { Database } from 'bun:sqlite';
 import { openGatewayDatabase } from '../database';
+import { version3DDL } from '../schema';
 
 /** The key the legacy database holds; its plaintext is gone from the file but its hash verifies. */
 export const LEGACY_TOKEN = 'sk-gw-legacy-token-0123456789abcdef';
@@ -18,7 +21,8 @@ export const LEGACY_NODE = {
   createdAt: '2024-01-01T00:00:00.000Z',
 };
 
-const LEGACY_SCHEMA = `
+/** The version-2 tables, as that version created them. */
+const VERSION_2_DDL = `
   CREATE TABLE api_keys (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -57,6 +61,9 @@ const LEGACY_SCHEMA = `
     node_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
   );
+`;
+
+const LEGACY_SCHEMA = `${VERSION_2_DDL}
   INSERT INTO gateway_config (k, v) VALUES ('require_auth', '1');
   INSERT INTO gateway_totals (id, request_count, prompt_tokens, completion_tokens) VALUES (1, 1, 7, 3);
   INSERT INTO request_logs (timestamp, protocol, model, key_name, prompt_tokens, completion_tokens,
@@ -64,6 +71,17 @@ const LEGACY_SCHEMA = `
     VALUES ('2024-01-01T00:00:00.000Z', 'openai', '${LEGACY_MODELLED}', 'old key', 7, 3, 2, 10, 200);
   PRAGMA user_version = 2;
 `;
+
+/**
+ * An empty in-memory version-3 database: the version-2 shape with the version-3 schema on top,
+ * and no rows.
+ */
+export function openVersion3Database(): Database {
+  const db = new Database(':memory:');
+  db.exec(VERSION_2_DDL);
+  db.exec(version3DDL);
+  return db;
+}
 
 /** Writes the version-2 database under `dataDir`; returns the token its API key was created with. */
 export function writeLegacyDatabase(dataDir: string, token = LEGACY_TOKEN): string {

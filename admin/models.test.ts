@@ -39,7 +39,7 @@ test('models and routes validate inputs and persist changes', async () => {
   expect((await call(`/models/${id}/routes`, 'POST', {
     providerId: provider.id,
     upstreamModel: 'x',
-    price: { input: -1, output: null, cacheRead: null, cacheWrite: null },
+    price: { input: -1, output: null, cacheRead: null },
   }))?.status).toBe(400);
   expect(deps.models.get(id)?.routes).toHaveLength(0);
   expect((await call(`/models/${id}/routes`, 'POST', {
@@ -70,11 +70,11 @@ for (const [field, value] of [
   });
 }
 
-for (const field of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+for (const field of ['input', 'output', 'cacheRead']) {
   for (const value of [-1, '1', undefined]) {
     test(`POST models rule 2: price.${field} ${String(value)} rejected`, async () => {
       const { deps, db } = fixture();
-      const price = { input: null, output: null, cacheRead: null, cacheWrite: null, [field]: value };
+      const price = { input: null, output: null, cacheRead: null, [field]: value };
       const response = await handleModelRoute(request('/models', 'POST', { name: 'm', price }), deps);
       expect(response?.status).toBe(400);
       expect((await response?.json()).error).toContain(`price.${field}`);
@@ -126,7 +126,7 @@ for (const field of ['input', 'output']) {
       name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
     }, deps.now());
     const model = deps.models.create({ name: 'm' }, deps.now());
-    const price = { input: 1, output: 1, cacheRead: null, cacheWrite: null, [field]: null };
+    const price = { input: 1, output: 1, cacheRead: null, [field]: null };
     const body = { providerId: provider.id, upstreamModel: 'x', price };
     const response = await handleModelRoute(request(`/models/${model.id}/routes`, 'POST', body), deps);
     expect(response?.status).toBe(400);
@@ -152,6 +152,42 @@ for (const [field, value] of [['weight', 0], ['weight', '1'], ['enabled', 1], ['
     db.close();
   });
 }
+
+// The price reader ignores a key it does not know, as it does everywhere else in a body, so a
+// client that still sends the retired cache-write price is not refused: the price is stored
+// without it. Rule 5.3 draws the line at malformed and out-of-range values, not unknown keys.
+test('rule 4: a price with cacheWrite is stored without it, the unknown key ignored', async () => {
+  const { deps, db } = fixture();
+  const sent = { input: 1, output: 2, cacheRead: 3, cacheWrite: 9 };
+  const stored = { input: 1, output: 2, cacheRead: 3 };
+  try {
+    const created = await handleModelRoute(request('/models', 'POST', { name: 'm', price: sent }), deps);
+    expect(created?.status).toBe(201);
+    const model = (await created!.json()).model;
+    expect(model.price).toEqual(stored);
+    const patched = await handleModelRoute(request(`/models/${model.id}`, 'PATCH', {
+      price: { ...sent, input: 4 },
+    }), deps);
+    expect(patched?.status).toBe(200);
+    expect((await patched!.json()).model.price).toEqual({ ...stored, input: 4 });
+    const provider = deps.providers.create({
+      name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+    }, deps.now());
+    const added = await handleModelRoute(request(`/models/${model.id}/routes`, 'POST', {
+      providerId: provider.id, upstreamModel: 'x', price: sent,
+    }), deps);
+    expect(added?.status).toBe(201);
+    const route = (await added!.json()).route;
+    expect(route.price).toEqual(stored);
+    const routePatched = await handleModelRoute(request(`/routes/${route.id}`, 'PATCH', {
+      price: { ...sent, output: 5 },
+    }), deps);
+    expect(routePatched?.status).toBe(200);
+    expect((await routePatched!.json()).route.price).toEqual({ ...stored, output: 5 });
+  } finally {
+    db.close();
+  }
+});
 
 for (const [path, method] of [
   ['/models', 'PUT'], ['/models/x', 'POST'], ['/models/x/routes', 'GET'], ['/routes/x', 'GET'],
@@ -198,7 +234,7 @@ test('PATCH route updates price and weight, then null inherits model price', asy
   }, deps.now());
   const model = deps.models.create({ name: 'm' }, deps.now());
   const route = deps.models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'x' });
-  const price = { input: 1, output: 2, cacheRead: null, cacheWrite: null };
+  const price = { input: 1, output: 2, cacheRead: null };
   const req = request(`/routes/${route.id}`, 'PATCH', { weight: 2, price });
   const response = await handleModelRoute(req, deps);
   expect((await response?.json()).route.price).toEqual(price);

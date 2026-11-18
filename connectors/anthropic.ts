@@ -43,7 +43,7 @@ async function modelsPage(provider: ProviderAccess, after: string | null): Promi
       upstreamId: item.id,
       contextLength: positiveNumber(item.max_input_tokens),
       maxOutputTokens: positiveNumber(item.max_tokens),
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: null },
     });
   }
   if (!body.has_more) return { models, next: null };

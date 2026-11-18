@@ -269,8 +269,8 @@ function finishReason(stopReason: unknown): string {
 
 /**
  * Chat usage for Messages usage. Messages counts cached input apart from `input_tokens`;
- * Chat counts it inside `prompt_tokens`. A count the upstream left out is written as 0:
- * the Chat usage object has no way to say "unknown".
+ * Chat counts it inside `prompt_tokens`, so a cache write adds to the prompt there too. A count
+ * the upstream left out is written as 0: the Chat usage object has no way to say "unknown".
  */
 function chatUsage(usage: JsonObject): JsonObject {
   const count = (key: string): number => (typeof usage[key] === 'number' ? usage[key] : 0);

@@ -60,7 +60,10 @@ test('replacing discovered models is atomic', () => {
     migrate(db);
     const store = new ProviderStore(db);
     const provider = store.create(input, now);
-    const model = { upstreamId: 'm', contextLength: 1024, maxOutputTokens: 512, price: { input: 1, output: 2, cacheRead: null, cacheWrite: 0 } };
+    const model = {
+      upstreamId: 'm', contextLength: 1024, maxOutputTokens: 512,
+      price: { input: 1, output: 2, cacheRead: 0 },
+    };
     store.replaceModels(provider.id, [model], now);
     expect(store.models(provider.id)).toEqual([{ ...model, fetchedAt: now.toISOString() }]);
     expect(() => store.replaceModels(provider.id, [model, model], now)).toThrow();

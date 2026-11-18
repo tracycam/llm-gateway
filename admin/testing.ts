@@ -31,7 +31,7 @@ export function fixture(): {
         upstreamId: 'upstream',
         contextLength: 100,
         maxOutputTokens: null,
-        price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+        price: { input: null, output: null, cacheRead: null },
       }];
     },
   };
@@ -69,7 +69,7 @@ export function usageEntry(keyId: string, modelId: string, providerId = 'p'): Us
     provider: { id: providerId, name: 'provider' },
     upstreamModel: 'upstream',
     status: 200,
-    usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 1 },
+    usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 },
     cost: 2,
     ttftMs: null,
     latencyMs: 100,

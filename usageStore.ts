@@ -43,7 +43,6 @@ interface SummaryRow {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
-  cache_write_tokens: number;
   cost: number;
 }
 interface TotalRow {
@@ -64,7 +63,6 @@ interface LogRow {
   input_tokens: number | null;
   output_tokens: number | null;
   cache_read_tokens: number | null;
-  cache_write_tokens: number | null;
   cost: number | null;
   ttft_ms: number | null;
   latency_ms: number;
@@ -94,7 +92,6 @@ function mapSummary(row: SummaryRow): UsageSummary {
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
     cacheReadTokens: row.cache_read_tokens,
-    cacheWriteTokens: row.cache_write_tokens,
     cost: row.cost,
   };
 }
@@ -109,11 +106,11 @@ export class UsageStore {
       const cost = entry.cost ?? 0;
       // A failed request has nothing to count; only an answered one can be missing its figures.
       const answered = entry.status < 400;
-      const allInput = u === null ? 0 : u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+      const allInput = u === null ? 0 : u.inputTokens + u.cacheReadTokens;
       this.db.query(`INSERT INTO usage_daily (day, key_id, key_name, model_id, model_name,
         provider_id, provider_name, requests, errors, unknown_usage, uncosted,
-        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        input_tokens, output_tokens, cache_read_tokens, cost)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(day, key_id, model_id, provider_id) DO UPDATE SET
           key_name = excluded.key_name, model_name = excluded.model_name,
           provider_name = excluded.provider_name, requests = requests + 1,
@@ -121,12 +118,12 @@ export class UsageStore {
           uncosted = uncosted + excluded.uncosted, input_tokens = input_tokens + excluded.input_tokens,
           output_tokens = output_tokens + excluded.output_tokens,
           cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
-          cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens, cost = cost + excluded.cost`)
+          cost = cost + excluded.cost`)
         .run(localDay(now), entry.key.id, entry.key.name, entry.model.id, entry.model.name,
           entry.provider?.id ?? '', entry.provider?.name ?? '', Number(!answered),
           Number(answered && u === null), Number(answered && entry.cost === null),
           u?.inputTokens ?? 0, u?.outputTokens ?? 0,
-          u?.cacheReadTokens ?? 0, u?.cacheWriteTokens ?? 0, cost);
+          u?.cacheReadTokens ?? 0, cost);
       this.db.query(`UPDATE api_keys SET request_count = request_count + 1,
         prompt_tokens = prompt_tokens + ?, completion_tokens = completion_tokens + ?,
         period_cost = period_cost + ?, total_cost = total_cost + ?, last_used_at = ? WHERE id = ?`)
@@ -135,11 +132,11 @@ export class UsageStore {
         prompt_tokens = prompt_tokens + ?, completion_tokens = completion_tokens + ?, cost = cost + ? WHERE id = 1`)
         .run(allInput, u?.outputTokens ?? 0, cost);
       this.db.query(`INSERT INTO request_logs (timestamp, protocol, key_name, model_name, provider_name,
-        upstream_model, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-        cost, ttft_ms, latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        upstream_model, status, input_tokens, output_tokens, cache_read_tokens,
+        cost, ttft_ms, latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(now.toISOString(), entry.protocol, entry.key.name, entry.model.name, entry.provider?.name ?? null,
           entry.upstreamModel, entry.status, u?.inputTokens ?? null, u?.outputTokens ?? null,
-          u?.cacheReadTokens ?? null, u?.cacheWriteTokens ?? null, entry.cost, entry.ttftMs,
+          u?.cacheReadTokens ?? null, entry.cost, entry.ttftMs,
           entry.latencyMs, entry.error);
       this.db.exec('DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY id DESC LIMIT 200)');
     })();
@@ -191,7 +188,6 @@ export class UsageStore {
       inputTokens: row.input_tokens,
       outputTokens: row.output_tokens,
       cacheReadTokens: row.cache_read_tokens,
-      cacheWriteTokens: row.cache_write_tokens,
       cost: row.cost,
       ttftMs: row.ttft_ms,
       latencyMs: row.latency_ms,
@@ -219,8 +215,8 @@ export class UsageStore {
     }>(`SELECT ${id} AS id, ${nameOf(id, name)} AS name,
       SUM(requests) AS requests, SUM(errors) AS errors, SUM(unknown_usage) AS unknown_usage,
       SUM(uncosted) AS uncosted, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-      SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
-      SUM(cost) AS cost FROM usage_daily grouped WHERE ${where} GROUP BY ${id} ORDER BY ${id}`)
+      SUM(cache_read_tokens) AS cache_read_tokens, SUM(cost) AS cost FROM usage_daily grouped
+      WHERE ${where} GROUP BY ${id} ORDER BY ${id}`)
       .all({ ':from': range.from ?? null, ':to': range.to ?? null,
         ':model': filter.modelId ?? null, ':key': filter.keyId ?? null });
   }

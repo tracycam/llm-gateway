@@ -38,7 +38,6 @@ interface ProviderModelRow {
   input_price: number | null;
   output_price: number | null;
   cache_read_price: number | null;
-  cache_write_price: number | null;
   fetched_at: string;
 }
 
@@ -108,11 +107,11 @@ export class ProviderStore {
     this.db.transaction(() => {
       this.db.query('DELETE FROM provider_models WHERE provider_id = ?').run(id);
       const insert = this.db.query(`INSERT INTO provider_models (provider_id, upstream_id, context_length,
-        max_output_tokens, input_price, output_price, cache_read_price, cache_write_price, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        max_output_tokens, input_price, output_price, cache_read_price, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const model of models) {
         insert.run(id, model.upstreamId, model.contextLength, model.maxOutputTokens, model.price.input,
-          model.price.output, model.price.cacheRead, model.price.cacheWrite, now.toISOString());
+          model.price.output, model.price.cacheRead, now.toISOString());
       }
     })();
   }
@@ -129,7 +128,6 @@ export class ProviderStore {
           input: row.input_price,
           output: row.output_price,
           cacheRead: row.cache_read_price,
-          cacheWrite: row.cache_write_price,
         },
         fetchedAt: row.fetched_at,
       }));

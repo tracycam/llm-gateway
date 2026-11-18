@@ -15,9 +15,9 @@ import { UsageStore } from '../usageStore';
 import type { AttemptInput, AttemptResult } from './attempt';
 import { handleInference, MAX_WAITING_PER_KEY, type InferenceDeps } from './handler';
 
-const price = { input: 1, output: 2, cacheRead: null, cacheWrite: null };
+const price = { input: 1, output: 2, cacheRead: null };
 const tokens: Usage = {
-  inputTokens: 1000000, outputTokens: 1000000, cacheReadTokens: 0, cacheWriteTokens: 0,
+  inputTokens: 1000000, outputTokens: 1000000, cacheReadTokens: 0,
 };
 const complete: AttemptResult = { kind: 'complete', body: '{"answer":"ok"}', usage: tokens };
 const rejected: AttemptResult = { kind: 'rejected', status: 400, body: '{"error":"rejected"}' };
@@ -164,7 +164,6 @@ function expectLog(f: ReturnType<typeof fixture>, expected: Partial<ReturnType<U
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
-    cacheWriteTokens: null,
     cost: null,
     ttftMs: null,
     latencyMs: 0,
@@ -541,7 +540,7 @@ test('rule 9: complete accounting uses route price and null ttft', async () => {
   f.script(f.routes[0], complete);
   await answer(f);
   expectLog(f, { cost: 7, inputTokens: 1000000, outputTokens: 1000000,
-    cacheReadTokens: 0, cacheWriteTokens: 0 });
+    cacheReadTokens: 0 });
   expect(f.usage.byModel()[0]).toMatchObject({ requests: 1, cost: 7 });
   f.db.close();
 });
@@ -575,7 +574,7 @@ for (const outcome of ['clean', 'error', 'cancelled'] as const) {
     const status = { clean: 200, error: 502, cancelled: 499 }[outcome];
     const error = { clean: null, error: 'broken', cancelled: 'client disconnected' }[outcome];
     expectLog(f, { timestamp: '2025-01-01T00:00:00.060Z', status, error, ttftMs: 10, latencyMs: 60,
-      inputTokens: 1000000, outputTokens: 1000000, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 3 });
+      inputTokens: 1000000, outputTokens: 1000000, cacheReadTokens: 0, cost: 3 });
     f.db.close();
   });
 }

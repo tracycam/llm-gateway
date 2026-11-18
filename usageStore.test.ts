@@ -21,7 +21,7 @@ function setup(period: 'day' | 'week' | 'month' | 'none' = 'day') {
   const usage = new UsageStore(db);
   const entry: UsageEntry = {
     protocol: 'openai', key, model, provider: null, upstreamModel: null, status: 200,
-    usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 1, cacheWriteTokens: 0 },
+    usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 1 },
     cost: 2, ttftMs: null, latencyMs: 50, error: null,
   };
   return { db, keys, models, key, model, usage, entry };
@@ -138,7 +138,7 @@ test('model price changes do not alter recorded cost', () => {
   const { db, usage, entry, models, model } = setup();
   try {
     usage.record(entry, new Date(2024, 0, 31, 12));
-    models.update(model.id, { price: { input: 999, output: 999, cacheRead: null, cacheWrite: null } });
+    models.update(model.id, { price: { input: 999, output: 999, cacheRead: null } });
     expect(usage.byModel()[0].cost).toBe(2);
   } finally {
     db.close();
@@ -170,9 +170,9 @@ test('the lifetime input count of a key includes cached tokens', () => {
   const { db, usage, entry, keys, key } = setup();
   try {
     const now = new Date(2024, 0, 31, 12);
-    usage.record({ ...entry, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 5, cacheWriteTokens: 3 } }, now);
-    expect(keys.get(key.id, now)).toMatchObject({ inputTokens: 18, outputTokens: 2 });
-    expect(usage.totals()).toMatchObject({ inputTokens: 18, outputTokens: 2 });
+    usage.record({ ...entry, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 5 } }, now);
+    expect(keys.get(key.id, now)).toMatchObject({ inputTokens: 15, outputTokens: 2 });
+    expect(usage.totals()).toMatchObject({ inputTokens: 15, outputTokens: 2 });
   } finally {
     db.close();
   }

@@ -19,8 +19,8 @@ import {
 } from './modelList';
 
 const start = new Date('2026-01-01T00:00:00Z');
-const priced: Price = { input: 1, output: 2, cacheRead: null, cacheWrite: null };
-const unpriced: Price = { input: null, output: null, cacheRead: null, cacheWrite: null };
+const priced: Price = { input: 1, output: 2, cacheRead: null };
+const unpriced: Price = { input: null, output: null, cacheRead: null };
 
 interface Fixture {
   db: Database;

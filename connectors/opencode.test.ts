@@ -267,11 +267,11 @@ const modelList = {
 
 const expectedModels = [
   { upstreamId: 'glm-5.3', contextLength: 204800, maxOutputTokens: 131072,
-    price: { input: 0.6, output: 2.2, cacheRead: 0.06, cacheWrite: 0.75 } },
+    price: { input: 0.6, output: 2.2, cacheRead: 0.06 } },
   { upstreamId: 'free-model', contextLength: 16384, maxOutputTokens: 4096,
-    price: { input: 0, output: 0, cacheRead: null, cacheWrite: null } },
+    price: { input: 0, output: 0, cacheRead: null } },
   { upstreamId: 'go-model', contextLength: 128000, maxOutputTokens: 16384,
-    price: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.3 } },
+    price: { input: 0.3, output: 1.2, cacheRead: 0.03 } },
 ];
 
 for (const preset of presets) {
@@ -303,7 +303,7 @@ for (const preset of presets) {
       upstreamId: 'bare',
       contextLength: null,
       maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: null },
     }]);
   });
 
@@ -318,7 +318,7 @@ for (const preset of presets) {
       upstreamId: 'odd',
       contextLength: null,
       maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: null },
     }]);
   });
 
@@ -368,7 +368,7 @@ for (const preset of presets) {
     expect(result).toEqual({
       kind: 'complete',
       body: chatAnswer,
-      usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 },
     });
     expect(s.requests[0]).toMatchObject({ method: 'POST', path: '/openai/v1/chat/completions' });
   });
@@ -403,7 +403,7 @@ for (const preset of presets) {
     expect(result).toEqual({
       kind: 'complete',
       body: messagesAnswer,
-      usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 },
     });
     expect(s.requests[0]).toMatchObject({ method: 'POST', path: '/anthropic/v1/messages' });
     expect(s.requests[0]?.headers.get('anthropic-version')).toBe('2026-10-21');

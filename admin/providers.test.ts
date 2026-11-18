@@ -28,7 +28,7 @@ test('credentials, refresh failure, publication and input validation', async () 
         upstreamId: 'upstream',
         contextLength: null,
         maxOutputTokens: null,
-        price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+        price: { input: null, output: null, cacheRead: null },
       }];
     },
   };

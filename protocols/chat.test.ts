@@ -7,7 +7,7 @@ const role = 'data: {"choices":[{"delta":{"role":"assistant","content":""},"fini
 const done = 'data: [DONE]\n\n';
 const usage = '{"prompt_tokens":100,"completion_tokens":7,' +
   '"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":10}}';
-const expectedUsage = { inputTokens: 70, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 10 };
+const expectedUsage = { inputTokens: 80, outputTokens: 7, cacheReadTokens: 20 };
 const text = 'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n';
 const finish = 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n';
 const usageChunk = `data: {"choices":[],"usage":${usage}}\n\n`;
@@ -88,8 +88,14 @@ test('OpenRouter transcript has expected frame kinds', () => {
   expect(frames(role + router + done).map((f) => observer.see(f))).toEqual(['preamble', 'content', 'end']);
 });
 
-test('input usage subtracts cache read and write', () => {
+test('input usage subtracts cache read; a cache write stays input', () => {
   expect(chat.usageOf({ usage: JSON.parse(usage) })).toEqual(expectedUsage);
+});
+
+test('a usage that reports only cached_tokens keeps its numbers', () => {
+  expect(chat.usageOf({
+    usage: { prompt_tokens: 100, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 20 } },
+  })).toEqual({ inputTokens: 80, outputTokens: 7, cacheReadTokens: 20 });
 });
 
 test('input usage is not negative', () => {
@@ -110,7 +116,6 @@ test('missing cache counts default to zero', () => {
     inputTokens: 1,
     outputTokens: 2,
     cacheReadTokens: 0,
-    cacheWriteTokens: 0,
   });
 });
 

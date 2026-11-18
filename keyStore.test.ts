@@ -49,7 +49,7 @@ test('refusal order forbids models before unpriced before over limit', () => {
     const models = new ModelStore(db);
     const keys = new KeyStore(db);
     const model = models.create({ name: 'one' }, now);
-    const price = { input: null, output: 1, cacheRead: null, cacheWrite: null };
+    const price = { input: null, output: 1, cacheRead: null };
     const key = keys.create({ name: 'key', restricted: true, costLimit: 0 }, now);
     expect(keys.refusalFor(key, model, [price])).toBe('forbidden-model');
     const allowed = keys.update(key.id, { restricted: false }, now)!;

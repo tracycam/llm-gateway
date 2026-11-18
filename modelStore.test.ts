@@ -5,7 +5,7 @@ import { ModelStore, priceOf } from './modelStore';
 import { ProviderStore } from './providerStore';
 
 const now = new Date('2024-01-01T00:00:00Z');
-const price = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 };
+const price = { input: 1, output: 2, cacheRead: 3 };
 
 function setup() {
   const db = new Database(':memory:');
@@ -126,7 +126,7 @@ test('the publish that creates the model gives the model the discovered price an
 
 test('a publish that adds a route to an existing model gives the route its discovered price', () => {
   const { db, models, providers, provider } = setup();
-  const cheap = { input: 0.15, output: 0.6, cacheRead: null, cacheWrite: null };
+  const cheap = { input: 0.15, output: 0.6, cacheRead: null };
   try {
     const other = addProvider(providers, 'other');
     providers.replaceModels(provider.id, [
@@ -164,8 +164,8 @@ test('a route gets no price when the discovered price is the model price', () =>
   }
 });
 
-// A difference in any one of the four fields is a difference, so each field gets its own case.
-for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+// A difference in any one of the three fields is a difference, so each field gets its own case.
+for (const field of ['input', 'output', 'cacheRead'] as const) {
   test(`a discovered price differing only in ${field} is the route price`, () => {
     const { db, models, providers, provider } = setup();
     const changed = { ...price, [field]: price[field] + 10 };
@@ -190,8 +190,8 @@ for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
 test('a discovered price without input or output gives the route no price', () => {
   const { db, models, providers, provider } = setup();
   const partials = [
-    { input: null, output: 0.6, cacheRead: null, cacheWrite: null },
-    { input: 0.15, output: null, cacheRead: null, cacheWrite: null },
+    { input: null, output: 0.6, cacheRead: null },
+    { input: 0.15, output: null, cacheRead: null },
   ];
   try {
     const model = models.create({ name: 'up', price }, now);
@@ -231,7 +231,7 @@ test('publish twice returns the existing route', () => {
     ], now);
     const first = models.publish(provider.id, 'up', now);
     // The upstream price may have moved since; publishing again still returns the route as stored.
-    const moved = { input: 9, output: 10, cacheRead: null, cacheWrite: null };
+    const moved = { input: 9, output: 10, cacheRead: null };
     providers.replaceModels(provider.id, [
       { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: moved },
     ], now);
@@ -246,7 +246,7 @@ test('route price overrides model price as a group', () => {
   const { db, models, provider } = setup();
   try {
     const model = models.create({ name: 'm', price }, now);
-    const routePrice = { input: 0, output: null, cacheRead: null, cacheWrite: 7 };
+    const routePrice = { input: 0, output: null, cacheRead: 7 };
     const route = models.addRoute(model.id, {
       providerId: provider.id, upstreamModel: 'up', price: routePrice,
     });
@@ -254,7 +254,7 @@ test('route price overrides model price as a group', () => {
     const cleared = models.updateRoute(route.id, { price: null })!;
     expect(priceOf(cleared, model)).toEqual(price);
     const partial = models.updateRoute(route.id, {
-      price: { input: null, output: null, cacheRead: 9, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: 9 },
     })!;
     expect(partial.price).toBeNull();
     expect(priceOf(partial, model)).toEqual(price);

@@ -36,9 +36,9 @@ test('Anthropic pagination requests after_id and parses model limits without pri
   const models = await anthropic.models(provider(base));
   expect(models).toEqual([
     { upstreamId: 'one', contextLength: 200000, maxOutputTokens: 8192,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null } },
+      price: { input: null, output: null, cacheRead: null } },
     { upstreamId: 'two', contextLength: null, maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null } },
+      price: { input: null, output: null, cacheRead: null } },
   ]);
   expect(requests.length).toBe(2);
   expect(requests[0]?.method).toBe('GET');

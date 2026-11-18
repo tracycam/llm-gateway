@@ -60,7 +60,7 @@ test('OpenAI and compatible parse context aliases and skip invalid ids', async (
     expect(models.map((m) => m.contextLength)).toEqual([100, 200, 300, null]);
     expect(models[0]).toEqual({
       upstreamId: 'a', contextLength: 100, maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: null },
     });
   }
 });
@@ -75,9 +75,9 @@ test('OpenRouter converts per-token prices, including free, dynamic and invalid 
   const models = await openrouter.models(provider(base));
   expect(models[0]).toEqual({
     upstreamId: 'model', contextLength: 128000, maxOutputTokens: 4096,
-    price: { input: 8, output: 2.5, cacheRead: 0, cacheWrite: null },
+    price: { input: 8, output: 2.5, cacheRead: 0 },
   });
-  expect(models[1]?.price).toEqual({ input: null, output: null, cacheRead: null, cacheWrite: null });
+  expect(models[1]?.price).toEqual({ input: null, output: null, cacheRead: null });
 });
 
 test('xAI converts cents per 100 million tokens and leaves missing prices unknown', async () => {
@@ -89,7 +89,7 @@ test('xAI converts cents per 100 million tokens and leaves missing prices unknow
   const models = await xai.models(provider(base));
   expect(models[0]).toEqual({
     upstreamId: 'grok', contextLength: 131072, maxOutputTokens: null,
-    price: { input: 2, output: 5, cacheRead: 0.5, cacheWrite: null },
+    price: { input: 2, output: 5, cacheRead: 0.5 },
   });
   expect(models[1]?.price.input).toBeNull();
 });
@@ -212,11 +212,11 @@ test('xAI 20000 cents per 100M converts to 2 USD per 1M', async () => {
   expect((await xai.models(provider(base)))[0]?.price.input).toBe(2);
 });
 
-test('xAI missing price and cache write are unknown', async () => {
+test('xAI missing prices are unknown', async () => {
   const base = stub(() => Response.json({ data: [{ id: 'grok' }] }));
   const price = (await xai.models(provider(base)))[0]!.price;
   expect(price.input).toBeNull();
-  expect(price.cacheWrite).toBeNull();
+  expect(price.cacheRead).toBeNull();
 });
 
 test('vLLM max_model_len is the context length', async () => {
@@ -252,7 +252,7 @@ for (const connector of [openai, openaiCompatible]) {
       upstreamId: 'model',
       contextLength: 8192,
       maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      price: { input: null, output: null, cacheRead: null },
     }]);
   });
 }

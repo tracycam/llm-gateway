@@ -423,6 +423,8 @@ for (const [stop, finish] of [
 }
 
 test('prompt_tokens is uncached input plus cache read plus cache write', () => {
+  // The Chat usage keeps the cache-write detail the Chat protocol defines; gateway accounting
+  // counts those tokens as input instead.
   expect(toChatResponse(upstreamMessage([]), 12).usage).toEqual({
     prompt_tokens: 15,
     completion_tokens: 4,

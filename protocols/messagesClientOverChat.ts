@@ -202,13 +202,15 @@ function usage(value: unknown): Record<string, number> {
   const data = isObject(value) ? value : {};
   const details = isObject(data.prompt_tokens_details) ? data.prompt_tokens_details : {};
   const count = (v: unknown) => typeof v === 'number' ? v : 0;
-  const read = count(details.cached_tokens);
-  const write = count(details.cache_write_tokens);
+  const cached = count(details.cached_tokens);
+  // Chat's `prompt_tokens` includes cached input; Messages counts it apart, so the rest is input.
+  // A cache write the Chat usage reports is input too, and the gateway has no count of its own to
+  // report for it: the field stays at 0 because Messages clients read it.
   // Messages requires numeric usage even when the upstream did not provide it.
   return {
-    input_tokens: Math.max(0, count(data.prompt_tokens) - read - write),
-    cache_read_input_tokens: read,
-    cache_creation_input_tokens: write,
+    input_tokens: Math.max(0, count(data.prompt_tokens) - cached),
+    cache_read_input_tokens: cached,
+    cache_creation_input_tokens: 0,
     output_tokens: count(data.completion_tokens),
   };
 }

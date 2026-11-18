@@ -269,7 +269,7 @@ for (const inbound of protocols) {
         if (!result.ok) return;
         assertNormal(await collect(result.body), inbound, upstream);
         expect(await result.finished).toEqual({
-          usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 },
           error: null,
           cancelled: false,
         });

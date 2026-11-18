@@ -56,14 +56,13 @@ export function nonNegativeNumberOrNull(value: unknown, field: string): number |
   return value;
 }
 
-/** Read a complete price object. */
+/** Read a complete price object. An unknown key is ignored, as everywhere in a body. */
 export function price(value: unknown, field = 'price'): Price {
   if (!isObject(value)) throw new InputError(`${field} 无效`);
   return {
     input: nonNegativeNumberOrNull(value.input, `${field}.input`),
     output: nonNegativeNumberOrNull(value.output, `${field}.output`),
     cacheRead: nonNegativeNumberOrNull(value.cacheRead, `${field}.cacheRead`),
-    cacheWrite: nonNegativeNumberOrNull(value.cacheWrite, `${field}.cacheWrite`),
   };
 }
 

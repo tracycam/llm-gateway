@@ -4,11 +4,13 @@ import type { Price } from '../protocol/gatewayApi';
 // re-exports it under its current name.
 export type { Price };
 
+/** What one request used, in the three kinds the gateway bills: input, output, cache read. */
 export interface Usage {
+  /** Input tokens that were not read from a cache; cache writes are counted here. */
   inputTokens: number;
   outputTokens: number;
+  /** Input tokens read from a cache. Disjoint from `inputTokens`. */
   cacheReadTokens: number;
-  cacheWriteTokens: number;
 }
 
 export function costOf(usage: Usage | null, price: Price): number | null {
@@ -16,7 +18,6 @@ export function costOf(usage: Usage | null, price: Price): number | null {
   return (
     usage.inputTokens * price.input +
     usage.outputTokens * price.output +
-    usage.cacheReadTokens * (price.cacheRead ?? price.input) +
-    usage.cacheWriteTokens * (price.cacheWrite ?? price.input)
+    usage.cacheReadTokens * (price.cacheRead ?? price.input)
   ) / 1_000_000;
 }

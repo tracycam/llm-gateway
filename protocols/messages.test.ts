@@ -1,5 +1,6 @@
 // Anthropic Messages frame classification and usage rules.
 import { expect, test } from 'bun:test';
+import { costOf } from '../pricing';
 import { messages } from './messages';
 import { SseParser } from './sse';
 
@@ -26,7 +27,7 @@ const failure = 'event: error\ndata: {"error":{"type":"overloaded_error","messag
 const full = start + ping + textStart + textDelta + blockStop + toolStart + toolDelta + blockStop +
   delta4 + delta7 + stop;
 const thinking = start + thinkingStart + thinkingDelta + blockStop + stop;
-const expectedUsage = { inputTokens: 10, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 3 };
+const expectedUsage = { inputTokens: 13, outputTokens: 7, cacheReadTokens: 20 };
 
 function frames(text: string) {
   const parser = new SseParser();
@@ -104,7 +105,7 @@ for (const [name, input] of [['thinking', thinking], ['in-band error', start + f
   });
 }
 
-test('complete usage keeps input and cache counts disjoint', () => {
+test('complete usage counts cache creation as input and cache reads apart', () => {
   expect(messages.usageOf({
     usage: {
       input_tokens: 10,
@@ -115,12 +116,24 @@ test('complete usage keeps input and cache counts disjoint', () => {
   })).toEqual(expectedUsage);
 });
 
+test('cache-creation tokens are costed at the input price', () => {
+  const usage = messages.usageOf({
+    usage: {
+      input_tokens: 10,
+      output_tokens: 7,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 3,
+    },
+  });
+  // 13 input at 2 + 7 output at 4 + 20 cache reads at 1, per 1M tokens.
+  expect(costOf(usage, { input: 2, output: 4, cacheRead: 1 })).toBe(74 / 1_000_000);
+});
+
 test('missing cache fields default to zero', () => {
   expect(messages.usageOf({ usage: { input_tokens: 1, output_tokens: 2 } })).toEqual({
     inputTokens: 1,
     outputTokens: 2,
     cacheReadTokens: 0,
-    cacheWriteTokens: 0,
   });
 });
 

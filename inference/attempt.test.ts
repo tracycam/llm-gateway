@@ -74,7 +74,7 @@ test('rule 2: refusal sends nothing; provider output limit is used', async () =>
     expect(s.requests).toHaveLength(0);
     req.body = { messages: [{ role: 'user', content: 'hi' }] };
     req.provider = { ...provider, model: () => ({ upstreamId: 'chosen', contextLength: null,
-      maxOutputTokens: 73, price: { input: null, output: null, cacheRead: null, cacheWrite: null } }) };
+      maxOutputTokens: 73, price: { input: null, output: null, cacheRead: null } }) };
     await attempt(req);
     expect(JSON.parse(s.requests[0].body).max_tokens).toBe(73);
   } finally { s.server.stop(true); }

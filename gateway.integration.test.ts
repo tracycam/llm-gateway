@@ -10,7 +10,7 @@ import { LEGACY_TOKEN, writeLegacyDatabase } from './testing/legacy';
 
 const ADMIN_TOKEN = 'gateway-admin-integration-0123456789';
 const PROVIDER_KEY = 'anthropic-provider-key-0123456789';
-const PRICE = { input: 1.5, output: 3, cacheRead: null, cacheWrite: null };
+const PRICE = { input: 1.5, output: 3, cacheRead: null };
 
 interface StubCall {
   method: string;

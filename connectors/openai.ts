@@ -22,7 +22,7 @@ interface ModelRequest {
   key: string | null;
 }
 
-const NO_PRICE: Price = { input: null, output: null, cacheRead: null, cacheWrite: null };
+const NO_PRICE: Price = { input: null, output: null, cacheRead: null };
 
 /** USD per token text to USD per 1M tokens; docs/gateway-connectors.md §4. */
 function usdPerTokenText(value: unknown): number | null {
@@ -55,7 +55,6 @@ function openrouterModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId
       input: usdPerTokenText(pricing.prompt),
       output: usdPerTokenText(pricing.completion),
       cacheRead: usdPerTokenText(pricing.input_cache_read),
-      cacheWrite: usdPerTokenText(pricing.input_cache_write),
     },
   };
 }
@@ -68,7 +67,6 @@ function xaiModel(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'> {
       input: centsPer100M(item.prompt_text_token_price),
       output: centsPer100M(item.completion_text_token_price),
       cacheRead: centsPer100M(item.cached_prompt_text_token_price),
-      cacheWrite: null,
     },
   };
 }

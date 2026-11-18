@@ -171,7 +171,7 @@ const chat = {
   },
 };
 
-test('complete response maps blocks and cached usage', () => {
+test('complete response maps blocks and reports cache writes as input', () => {
   expect(toMessagesResponse(chat)).toEqual({
     id: 'id',
     type: 'message',
@@ -185,9 +185,9 @@ test('complete response maps blocks and cached usage', () => {
     stop_reason: 'tool_use',
     stop_sequence: null,
     usage: {
-      input_tokens: 70,
+      input_tokens: 80,
       cache_read_input_tokens: 20,
-      cache_creation_input_tokens: 10,
+      cache_creation_input_tokens: 0,
       output_tokens: 7,
     },
   });
@@ -310,10 +310,11 @@ test('transcript tool arguments in five fragments', () => {
   expect(partials.map((e) => e.data.delta.partial_json).join('')).toBe(fragments.join(''));
 });
 
-test('transcript usage-only chunk before DONE', () => {
+test('transcript usage-only chunk before DONE reports the cache write as input', () => {
   const events = checkStream(transcript([chunk({ content: 'x' }), chunk({}, 'stop'),
     { id: 'id', model: 'm', choices: [], usage: chat.usage }]), [...start, ...block, ...end]);
-  expect(events.at(-2)?.data.usage.input_tokens).toBe(70);
+  expect(events.at(-2)?.data.usage.input_tokens).toBe(80);
+  expect(events.at(-2)?.data.usage.cache_creation_input_tokens).toBe(0);
 });
 
 test('transcript finish reason and usage on same chunk', () => {

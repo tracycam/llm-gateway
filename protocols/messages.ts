@@ -16,16 +16,20 @@ const errorTypes: Record<number, string> = {
   529: 'overloaded_error',
 };
 
-function mergeUsage(previous: Usage | null, value: unknown): Usage | null {
-  if (!isObject(value)) return previous;
-  const input = numberOrNull(value.input_tokens) ?? previous?.inputTokens;
-  const output = numberOrNull(value.output_tokens) ?? previous?.outputTokens;
-  if (input === undefined || output === undefined) return previous;
+/**
+ * Usage for a Messages usage object. Messages keeps cached input out of `input_tokens`, apart from
+ * what the upstream read from or wrote to a cache; the gateway bills cache reads on their own and
+ * counts cache writes as input, so `inputTokens` is `input_tokens` plus `cache_creation_input_tokens`.
+ */
+function usageOf(value: unknown): Usage | null {
+  if (!isObject(value)) return null;
+  const input = numberOrNull(value.input_tokens);
+  const output = numberOrNull(value.output_tokens);
+  if (input === null || output === null) return null;
   return {
-    inputTokens: input,
+    inputTokens: input + (numberOrNull(value.cache_creation_input_tokens) ?? 0),
     outputTokens: output,
-    cacheReadTokens: numberOrNull(value.cache_read_input_tokens) ?? previous?.cacheReadTokens ?? 0,
-    cacheWriteTokens: numberOrNull(value.cache_creation_input_tokens) ?? previous?.cacheWriteTokens ?? 0,
+    cacheReadTokens: numberOrNull(value.cache_read_input_tokens) ?? 0,
   };
 }
 
@@ -35,7 +39,7 @@ function errorOf(body: unknown): string | null {
 }
 
 export const messages: ProtocolModule = {
-  usageOf: (body) => mergeUsage(null, isObject(body) ? body.usage : null),
+  usageOf: (body) => usageOf(isObject(body) ? body.usage : null),
   errorOf,
   errorBody(status, message) {
     const type = errorTypes[status] ?? 'api_error';
@@ -43,6 +47,7 @@ export const messages: ProtocolModule = {
   },
   observe() {
     let usage: Usage | null = null;
+    /** Every usage field the upstream has reported: a later report may carry only some of them. */
     let fields: Record<string, unknown> = {};
     let error: string | null = null;
     return {
@@ -57,7 +62,7 @@ export const messages: ProtocolModule = {
           : type === 'message_delta' ? body?.usage : null;
         if (isObject(update)) {
           fields = { ...fields, ...update };
-          usage = mergeUsage(usage, fields);
+          usage = usageOf(fields) ?? usage;
         }
         if (type === 'error') {
           const message = isObject(body?.error) ? body.error.message : null;

@@ -14,6 +14,11 @@ const errorTypes: Record<number, string> = {
   429: 'rate_limit_error',
 };
 
+/**
+ * Usage for a Chat Completions usage object. Chat's `prompt_tokens` includes cached input; the
+ * gateway bills cache reads apart, so its own input is the remainder. Any cache write the upstream
+ * reports is input: `prompt_tokens` already counts it and no price is charged for it on its own.
+ */
 function usageOf(body: unknown): Usage | null {
   const usage = isObject(body) && isObject(body.usage) ? body.usage : null;
   const prompt = numberOrNull(usage?.prompt_tokens);
@@ -21,12 +26,10 @@ function usageOf(body: unknown): Usage | null {
   if (prompt === null || output === null) return null;
   const details = isObject(usage?.prompt_tokens_details) ? usage.prompt_tokens_details : null;
   const cacheReadTokens = numberOrNull(details?.cached_tokens) ?? 0;
-  const cacheWriteTokens = numberOrNull(details?.cache_write_tokens) ?? 0;
   return {
-    inputTokens: Math.max(0, prompt - cacheReadTokens - cacheWriteTokens),
+    inputTokens: Math.max(0, prompt - cacheReadTokens),
     outputTokens: output,
     cacheReadTokens,
-    cacheWriteTokens,
   };
 }
 

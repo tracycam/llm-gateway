@@ -10,7 +10,7 @@ function setup() {
     auto_publish INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT)`);
   db.run(`CREATE TABLE provider_models (provider_id TEXT, upstream_id TEXT, context_length INTEGER,
     max_output_tokens INTEGER, input_price REAL, output_price REAL, cache_read_price REAL,
-    cache_write_price REAL, fetched_at TEXT)`);
+    fetched_at TEXT)`);
   const store = new ProviderStore(db);
   const provider = store.create({
     name: 'provider', connector: 'test', baseUrl: 'http://localhost', credential: 'old', autoPublish: false,
@@ -46,7 +46,7 @@ test('model loads the stored list once for several lookups', () => {
   const { db, store, provider } = setup();
   const model = {
     upstreamId: 'one', contextLength: 10, maxOutputTokens: 5,
-    price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+    price: { input: null, output: null, cacheRead: null },
   };
   store.replaceModels(provider.id, [model], new Date(0));
   let queries = 0;
