@@ -5,6 +5,7 @@ import {
   type ProviderAccess,
   type UpstreamTarget,
 } from '../connectors/connector';
+import { LoginExpired } from '../connectors/tokens';
 import type { Usage } from '../pricing';
 import { bridgeRequest, bridgeResponse, bridgeStream, type Bridge, type Finished } from '../protocols/bridge';
 import { parseJson } from '../protocols/json';
@@ -94,6 +95,7 @@ function errorAnswer(
   input: AttemptInput, target: UpstreamTarget, response: Response, text: string,
 ): AttemptResult {
   const status = response.status;
+  if (status === 401) input.connector.rejected?.(input.provider);
   const outcome = classify(status, response.headers.get('retry-after'), input.now());
   const message = protocolModule(target.protocol).errorOf(parseJson(text)) ?? `HTTP ${status}`;
   if (outcome.kind === 'client') {
@@ -166,6 +168,12 @@ export async function attempt(input: AttemptInput): Promise<AttemptResult> {
   try {
     target = await input.connector.target(input.provider, input.upstreamModel, input.inbound);
   } catch (error) {
+    // A login the authorization server will not renew fails this route until the provider is
+    // signed in again; its message names no token.
+    if (error instanceof LoginExpired) {
+      input.provider.rejectCredential();
+      return failed({ kind: 'route' }, null, error.message);
+    }
     // Connectors report expected target failures as UpstreamFailure; programming errors propagate.
     if (error instanceof UpstreamFailure) return failed({ kind: 'route' }, null, error.message);
     throw error;

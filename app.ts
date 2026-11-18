@@ -11,11 +11,13 @@ import type { AdminDeps } from './admin/deps';
 import { Cluster } from './cluster';
 import type { NodeLinkOptions } from './nodeLink';
 import type { Connector } from './connectors/connector';
+import { CredentialRenewals } from './connectors/tokens';
 import { errorResponse, jsonResponse } from './http';
 import { attempt } from './inference/attempt';
 import { handleInference, MAX_QUEUE_WAIT_MS, type InferenceDeps } from './inference/handler';
 import { handleModel, handleModelList, type ModelListDeps } from './inference/modelList';
 import { KeyStore } from './keyStore';
+import { LoginSessions } from './login';
 import { ModelStore } from './modelStore';
 import { openNodeEvents } from './nodeEvents';
 import { handleNodeRoute, NODES_PATH } from './nodeRoutes';
@@ -63,7 +65,7 @@ export interface GatewayAppOptions {
 /** A gateway that can answer requests without a network listener. */
 export interface GatewayApp {
   handle(req: Request): Promise<Response>;
-  /** Closes the node connections and the one database. */
+  /** Closes the login sessions, the node connections and the one database. */
   close(): Promise<void>;
 }
 
@@ -146,16 +148,20 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
   const cluster = new Cluster(nodes.list(), options.nodeTiming);
   const router = new Router();
   const admission = new Admission();
+  const renewals = new CredentialRenewals();
+  const logins = new LoginSessions({
+    providers, connector: options.connector, fetch: options.fetch, now: options.now,
+  });
   let closed = false;
 
   const admin: AdminDeps = {
-    providers, models, keys, usage,
+    providers, models, keys, usage, logins, renewals,
     connector: options.connector,
     connectors: options.connectors,
     now: options.now,
   };
   const inference: InferenceDeps = {
-    keys, models, providers, usage, router, admission,
+    keys, models, providers, usage, router, admission, renewals,
     connector: options.connector,
     attempt,
     fetch: options.fetch,
@@ -205,6 +211,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      logins.close();
       await cluster.close();
       options.db.close();
     },

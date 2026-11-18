@@ -7,20 +7,28 @@ import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
 import type { AdminDeps } from './deps';
+import { CredentialRenewals } from '../connectors/tokens';
+import { LoginSessions } from '../login';
 import { handleModelRoute } from './models';
 import { fixture, request } from './testing';
 
 test('models and routes validate inputs and persist changes', async () => {
   const db = new Database(':memory:');
   migrate(db);
+  const providers = new ProviderStore(db);
+  const now = () => new Date('2026-01-01T00:00:00Z');
   const deps: AdminDeps = {
-    providers: new ProviderStore(db),
+    providers,
     models: new ModelStore(db),
     keys: new KeyStore(db),
     usage: new UsageStore(db),
+    logins: new LoginSessions({
+      providers, connector: () => null, fetch, now, wait: () => new Promise<void>(() => {}),
+    }),
+    renewals: new CredentialRenewals(),
     connector: () => null,
     connectors: () => [],
-    now: () => new Date('2026-01-01T00:00:00Z'),
+    now,
   };
   const call = (path: string, method = 'GET', body?: unknown) => handleModelRoute(new Request(
     `http://localhost/api/gateway${path}`,

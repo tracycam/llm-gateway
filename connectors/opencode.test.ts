@@ -64,7 +64,10 @@ function stub(handler: (req: Request) => Response | Promise<Response>): Stub {
 function access(
   preset: Preset, baseUrl: string | null, credential: string | null = JSON.stringify({ apiKey: KEY }),
 ): ProviderAccess {
-  return { id: preset.id, baseUrl, credential, saveCredential() {}, model() { return null; } };
+  return {
+    id: preset.id, baseUrl, credential, saveCredential() {}, rejectCredential() {},
+    renewOnce: (renew) => renew(), model() { return null; },
+  };
 }
 
 const chatAnswer = JSON.stringify({

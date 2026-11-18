@@ -17,7 +17,10 @@ function stub(handler: (req: Request) => Response): string {
 function provider(
   baseUrl: string | null, credential: string | null = '{"apiKey":"secret-key"}'
 ): ProviderAccess {
-  return { id: 'test', baseUrl, credential, saveCredential() {}, model() { return null; } };
+  return {
+    id: 'test', baseUrl, credential, saveCredential() {}, rejectCredential() {},
+    renewOnce: (renew) => renew(), model() { return null; },
+  };
 }
 
 /** The URLs a call asks the global fetch for, answered without network access. */

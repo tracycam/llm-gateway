@@ -3,6 +3,7 @@ import type {
   ConnectorInfo,
   ConnectorsResponse,
   DiscoveredModel,
+  LoginResponse,
   ProviderListItem,
   ProviderModelsResponse,
   ProviderPatchBody,
@@ -14,6 +15,7 @@ import type {
 import { providerAccess } from '../connectors/access';
 import { UpstreamFailure } from '../connectors/connector';
 import { errorResponse, jsonResponse } from '../http';
+import { LoginFailure } from '../login';
 import type { ProviderModelInput, ProviderRecord } from '../providerStore';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';
@@ -33,6 +35,13 @@ function existing(deps: AdminDeps, id: string): ProviderRecord {
   const provider = deps.providers.get(id);
   if (!provider) throw new InputError('未找到提供商', 404);
   return provider;
+}
+
+/** Refuse a provider whose connector is not one the gateway signs in. */
+function loginOnly(deps: AdminDeps, provider: ProviderRecord): void {
+  const connector = deps.connector(provider.connector);
+  if (!connector) throw new InputError('connector 无效');
+  if (connector.credential !== 'login') throw new InputError('该提供商不使用登录');
 }
 
 function discovered(deps: AdminDeps, id: string): DiscoveredModel[] {
@@ -94,7 +103,7 @@ async function refresh(_req: Request, deps: AdminDeps, [id]: string[]): Promise<
   const provider = existing(deps, id);
   const connector = deps.connector(provider.connector);
   if (!connector) throw new InputError('connector 无效');
-  const access = providerAccess(deps.providers, provider);
+  const access = providerAccess(deps.providers, provider, deps.renewals);
   let models: ProviderModelInput[];
   try {
     models = await connector.models(access);
@@ -143,6 +152,34 @@ function listModels(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   return jsonResponse({ models: discovered(deps, id) } satisfies ProviderModelsResponse);
 }
 
+/** Start a device-code login; 201 with the code the administrator confirms in a browser. */
+async function startLogin(_req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
+  const provider = existing(deps, id);
+  loginOnly(deps, provider);
+  try {
+    const login = await deps.logins.start(id);
+    return jsonResponse({ login } satisfies LoginResponse, 201);
+  } catch (error) {
+    // The provider cannot log in, or its authorization server could not be asked.
+    if (error instanceof LoginFailure) return errorResponse(error.message, error.status);
+    throw error;
+  }
+}
+
+function loginStatus(_req: Request, deps: AdminDeps, [id]: string[]): Response {
+  existing(deps, id);
+  return jsonResponse({ login: deps.logins.status(id) } satisfies LoginResponse);
+}
+
+/** Sign the provider out: stop a pending login and drop the credential it was signed in with. */
+function cancelLogin(_req: Request, deps: AdminDeps, [id]: string[]): Response {
+  const provider = existing(deps, id);
+  loginOnly(deps, provider);
+  deps.logins.cancel(id);
+  deps.providers.setCredential(id, null);
+  return new Response(null, { status: 204 });
+}
+
 const routes: readonly AdminRoute[] = [
   ['GET', /^\/api\/gateway\/connectors$/, connectors],
   ['GET', /^\/api\/gateway\/providers$/, list],
@@ -152,6 +189,9 @@ const routes: readonly AdminRoute[] = [
   ['GET', /^\/api\/gateway\/providers\/([^/]+)\/models$/, listModels],
   ['POST', /^\/api\/gateway\/providers\/([^/]+)\/refresh$/, refresh],
   ['POST', /^\/api\/gateway\/providers\/([^/]+)\/publish$/, publish],
+  ['POST', /^\/api\/gateway\/providers\/([^/]+)\/login$/, startLogin],
+  ['GET', /^\/api\/gateway\/providers\/([^/]+)\/login$/, loginStatus],
+  ['DELETE', /^\/api\/gateway\/providers\/([^/]+)\/login$/, cancelLogin],
 ];
 
 /** Handle provider and connector paths; return null for other paths. */

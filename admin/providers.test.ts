@@ -5,8 +5,10 @@ import { providerAccess } from '../connectors/access';
 import type { Connector } from '../connectors/connector';
 import { UpstreamFailure } from '../connectors/connector';
 import { CONNECTORS, connectorById } from '../connectors/registry';
-import { ModelStore } from '../modelStore';
+import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore } from '../keyStore';
+import { LoginSessions } from '../login';
+import { ModelStore } from '../modelStore';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
@@ -34,14 +36,21 @@ test('credentials, refresh failure, publication and input validation', async () 
       }];
     },
   };
+  const providers = new ProviderStore(db);
+  const find = (id: string) => id === connector.id ? connector : null;
+  const now = () => new Date('2026-01-01T00:00:00Z');
   const deps: AdminDeps = {
-    providers: new ProviderStore(db),
+    providers,
     models: new ModelStore(db),
     keys: new KeyStore(db),
     usage: new UsageStore(db),
-    connector: (id) => id === connector.id ? connector : null,
+    logins: new LoginSessions({
+      providers, connector: find, fetch, now, wait: () => new Promise<void>(() => {}),
+    }),
+    renewals: new CredentialRenewals(),
+    connector: find,
     connectors: () => [connector],
-    now: () => new Date('2026-01-01T00:00:00Z'),
+    now,
   };
   const call = (path: string, method = 'GET', body?: unknown) => handleProviderRoute(new Request(
     `http://localhost/api/gateway${path}`,
@@ -235,7 +244,8 @@ test('a keyless provider with no address resolves to the connector default', asy
     });
     const stored = deps.providers.get(provider.id)!;
     const connector = connectorById(stored.connector)!;
-    const target = await connector.target(providerAccess(deps.providers, stored), 'gpt', 'chat');
+    const access = providerAccess(deps.providers, stored, deps.renewals);
+    const target = await connector.target(access, 'gpt', 'chat');
     expect(target.url).toBe('https://api.openai.com/v1/chat/completions');
     expect(target.headers).toEqual({});
   } finally {
@@ -292,7 +302,7 @@ test('providerAccess reads discovered models lazily once', async () => {
     name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
   }, deps.now());
   const { providerAccess } = await import('../connectors/access');
-  const access = providerAccess(deps.providers, provider);
+  const access = providerAccess(deps.providers, provider, deps.renewals);
   await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
   expect(access.model('upstream')?.upstreamId).toBe('upstream');
   deps.providers.replaceModels(provider.id, [], deps.now());

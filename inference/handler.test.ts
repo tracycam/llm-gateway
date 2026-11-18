@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Admission, QueueFull } from '../admission';
 import type { Connector } from '../connectors/connector';
+import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore, type KeyInput } from '../keyStore';
 import { ModelStore } from '../modelStore';
 import type { Usage } from '../pricing';
@@ -52,6 +53,7 @@ function fixture(options: { routes?: number; key?: Partial<KeyInput>; priced?: b
   const calls: AttemptInput[] = [];
   const deps: InferenceDeps = {
     keys, models, providers, usage, router, admission, now, fetch,
+    renewals: new CredentialRenewals(),
     connector: (id) => id === 'fake' ? connector : null,
     queueDeadline: () => ({ signal: new AbortController().signal, cancel: () => {} }),
     attempt: async (input) => {

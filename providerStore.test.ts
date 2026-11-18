@@ -42,6 +42,28 @@ test('provider CRUD and credential replacement', () => {
   }
 });
 
+test('rule B1: a rejected credential is marked until a new one is stored', () => {
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    const store = new ProviderStore(db);
+    const created = store.create(input, now);
+    expect(created.credentialRejected).toBe(false);
+    expect(store.rejectCredential(created.id)).toBe(true);
+    expect(store.get(created.id)).toMatchObject({ credentialRejected: true, hasCredential: true });
+    expect(store.credential(created.id)).toBe(input.credential);
+    expect(JSON.stringify(store.list())).not.toContain(input.credential);
+    store.setCredential(created.id, 'replacement');
+    expect(store.get(created.id)).toMatchObject({ credentialRejected: false });
+    store.rejectCredential(created.id);
+    store.setCredential(created.id, null);
+    expect(store.get(created.id)).toMatchObject({ credentialRejected: false, hasCredential: false });
+    expect(store.rejectCredential('prv-missing')).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
 test('duplicate provider name is refused', () => {
   const db = new Database(':memory:');
   try {

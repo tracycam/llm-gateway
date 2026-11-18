@@ -521,3 +521,24 @@ test('a valid key gets the 404 modelResponse gives for an unknown model', async 
     f.db.close();
   }
 });
+
+test('rule B2: the model list leaves out a model whose only route is rejected', async () => {
+  const f = fixture();
+  try {
+    const model = readyModel(f, 'model');
+    const other = f.providers.create({
+      name: 'other', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+    }, start);
+    f.models.addRoute(model.id, { providerId: other.id, upstreamModel: 'up' });
+    const key = f.keys.create({ name: 'key' }, start);
+    f.providers.rejectCredential(f.provider.id);
+    expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({
+      object: 'list',
+      data: [{ id: 'model', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' }],
+    });
+    f.providers.rejectCredential(other.id);
+    expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({ object: 'list', data: [] });
+  } finally {
+    f.db.close();
+  }
+});

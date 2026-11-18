@@ -3,11 +3,13 @@ import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { ProviderStore } from '../providerStore';
 import { providerAccess } from './access';
+import { CredentialRenewals } from './tokens';
 
 function setup() {
   const db = new Database(':memory:');
   db.run(`CREATE TABLE providers (id TEXT, name TEXT, connector TEXT, base_url TEXT, credential TEXT,
-    auto_publish INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT)`);
+    auto_publish INTEGER, enabled INTEGER DEFAULT 1, credential_rejected INTEGER DEFAULT 0,
+    created_at TEXT)`);
   db.run(`CREATE TABLE provider_models (provider_id TEXT, upstream_id TEXT, context_length INTEGER,
     max_output_tokens INTEGER, input_price REAL, output_price REAL, cache_read_price REAL,
     fetched_at TEXT)`);
@@ -15,35 +17,35 @@ function setup() {
   const provider = store.create({
     name: 'provider', connector: 'test', baseUrl: 'http://localhost', credential: 'old', autoPublish: false,
   }, new Date(0));
-  return { db, store, provider };
+  return { db, store, provider, renewals: new CredentialRenewals() };
 }
 
 test('id and baseUrl are copied from the provider', () => {
-  const { db, store, provider } = setup();
-  const access = providerAccess(store, provider);
+  const { db, store, provider, renewals } = setup();
+  const access = providerAccess(store, provider, renewals);
   expect(access.id).toBe(provider.id);
   expect(access.baseUrl).toBe('http://localhost');
   db.close();
 });
 
 test('credential is read when access is constructed', () => {
-  const { db, store, provider } = setup();
+  const { db, store, provider, renewals } = setup();
   store.setCredential(provider.id, 'new');
-  const access = providerAccess(store, provider);
+  const access = providerAccess(store, provider, renewals);
   store.setCredential(provider.id, 'later');
   expect(access.credential).toBe('new');
   db.close();
 });
 
 test('saveCredential writes through to the provider store', () => {
-  const { db, store, provider } = setup();
-  providerAccess(store, provider).saveCredential('new');
+  const { db, store, provider, renewals } = setup();
+  providerAccess(store, provider, renewals).saveCredential('new');
   expect(store.credential(provider.id)).toBe('new');
   db.close();
 });
 
 test('model loads the stored list once for several lookups', () => {
-  const { db, store, provider } = setup();
+  const { db, store, provider, renewals } = setup();
   const model = {
     upstreamId: 'one', contextLength: 10, maxOutputTokens: 5,
     price: { input: null, output: null, cacheRead: null },
@@ -55,7 +57,7 @@ test('model loads the stored list once for several lookups', () => {
     queries += 1;
     return original(id);
   };
-  const access = providerAccess(store, provider);
+  const access = providerAccess(store, provider, renewals);
   expect(queries).toBe(0);
   expect(access.model('one')).toMatchObject(model);
   expect(access.model('two')).toBeNull();

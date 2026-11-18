@@ -84,14 +84,21 @@ export function openVersion3Database(): Database {
 }
 
 /**
- * An empty in-memory version-4 database. Version 5 renames connector ids in rows only, so the
- * version-4 schema is the version-5 schema; the migration is run to build it and the version is
- * then set back to 4.
+ * An empty in-memory version-4 database. Version 5 renames connector ids in rows only and
+ * version 6 adds a column, so the migration is run to build the rest of the schema, then the
+ * version-6 column is dropped and the version is set back to 4.
  */
 export function openVersion4Database(): Database {
   const db = openVersion3Database();
   migrate(db);
-  db.exec('PRAGMA user_version = 4');
+  db.exec('ALTER TABLE providers DROP COLUMN credential_rejected; PRAGMA user_version = 4;');
+  return db;
+}
+
+/** An empty in-memory version-5 database: the version-4 schema, which version 5 does not change. */
+export function openVersion5Database(): Database {
+  const db = openVersion4Database();
+  db.exec('PRAGMA user_version = 5');
   return db;
 }
 

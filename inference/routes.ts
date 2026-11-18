@@ -1,5 +1,6 @@
-// Which routes of a model a request can be sent on: enabled, with a live provider and a known
-// connector. Pure: reads the stores and the connector registry, nothing else.
+// Which routes of a model a request can be sent on: enabled, with a live provider, a known
+// connector and a credential that can still work. Pure: reads the stores and the connector
+// registry, nothing else.
 
 import type { Connector } from '../connectors/connector';
 import type { ModelRecord, RouteRecord } from '../modelStore';
@@ -13,8 +14,19 @@ export interface UsableRoute {
 }
 
 /**
+ * Whether requests may be sent to this provider: its credential is not one the provider has
+ * refused, and a provider the gateway signs in has a credential. Requests sent to such a
+ * provider would fail and cost a round trip, so the model fails over instead.
+ */
+function credentialUsable(provider: ProviderRecord, connector: Connector): boolean {
+  if (provider.credentialRejected) return false;
+  return connector.credential !== 'login' || provider.hasCredential;
+}
+
+/**
  * The routes of `model` a request may be sent on: the route is enabled, its provider exists
- * and is enabled, and the provider's connector is known. In the order the store returns them.
+ * and is enabled, the provider's connector is known, and the provider's credential is usable.
+ * In the order the store returns them.
  */
 export function usableRoutes(
   model: ModelRecord,
@@ -28,6 +40,7 @@ export function usableRoutes(
     if (!provider || !provider.enabled) continue;
     const found = connector(provider.connector);
     if (!found) continue;
+    if (!credentialUsable(provider, found)) continue;
     usable.push({ route, provider, connector: found });
   }
   return usable;

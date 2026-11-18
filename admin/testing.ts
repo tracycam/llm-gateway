@@ -1,13 +1,20 @@
 // In-memory dependencies for management route tests.
 import { Database } from 'bun:sqlite';
 import { UpstreamFailure, type Connector } from '../connectors/connector';
+import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore } from '../keyStore';
+import { LoginSessions } from '../login';
 import { ModelStore } from '../modelStore';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
 import type { UsageEntry } from '../usageStore';
 import type { AdminDeps } from './deps';
+
+/** A login that never polls: this fixture's connector cannot log in, so nothing starts one. */
+function neverPoll(): Promise<void> {
+  return new Promise<void>(() => {});
+}
 
 /** Create isolated real stores and a configurable connector. */
 export function fixture(): {
@@ -35,14 +42,19 @@ export function fixture(): {
       }];
     },
   };
+  const providers = new ProviderStore(db);
+  const find = (id: string) => id === connector.id ? connector : null;
+  const now = () => new Date('2026-01-01T00:00:00Z');
   const deps: AdminDeps = {
-    providers: new ProviderStore(db),
+    providers,
     models: new ModelStore(db),
     keys: new KeyStore(db),
     usage: new UsageStore(db),
-    connector: (id) => id === connector.id ? connector : null,
+    logins: new LoginSessions({ providers, connector: find, fetch, now, wait: neverPoll }),
+    renewals: new CredentialRenewals(),
+    connector: find,
     connectors: () => [connector],
-    now: () => new Date('2026-01-01T00:00:00Z'),
+    now,
   };
   return { db, deps, connector, state };
 }

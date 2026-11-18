@@ -29,6 +29,7 @@ interface ProviderRow {
   enabled: number;
   auto_publish: number;
   has_credential: number;
+  credential_rejected: number;
   created_at: string;
 }
 interface ProviderModelRow {
@@ -42,7 +43,7 @@ interface ProviderModelRow {
 }
 
 const selectProvider = `SELECT id, name, connector, base_url, enabled, auto_publish,
-  credential IS NOT NULL AS has_credential, created_at FROM providers`;
+  credential IS NOT NULL AS has_credential, credential_rejected, created_at FROM providers`;
 
 function mapProvider(row: ProviderRow): ProviderRecord {
   return {
@@ -53,6 +54,7 @@ function mapProvider(row: ProviderRow): ProviderRecord {
     enabled: row.enabled !== 0,
     autoPublish: row.auto_publish !== 0,
     hasCredential: row.has_credential !== 0,
+    credentialRejected: row.credential_rejected !== 0,
     createdAt: row.created_at,
   };
 }
@@ -88,8 +90,24 @@ export class ProviderStore {
     return this.get(id);
   }
 
+  /**
+   * Replaces the stored credential; null removes it. A credential just stored is never one the
+   * provider has refused, so the rejected mark is cleared either way.
+   */
   setCredential(id: string, credential: string | null): boolean {
-    return this.db.query('UPDATE providers SET credential = ? WHERE id = ?').run(credential, id).changes > 0;
+    return this.db.query(
+      'UPDATE providers SET credential = ?, credential_rejected = 0 WHERE id = ?'
+    ).run(credential, id).changes > 0;
+  }
+
+  /**
+   * Marks the stored credential as refused by the provider: its routes leave routing until a
+   * new credential is stored. Returns false for an unknown provider.
+   */
+  rejectCredential(id: string): boolean {
+    return this.db.query(
+      'UPDATE providers SET credential_rejected = 1 WHERE id = ?'
+    ).run(id).changes > 0;
   }
 
   credential(id: string): string | null {

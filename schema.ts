@@ -166,7 +166,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 5) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 6) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -265,6 +265,17 @@ export function migrate(db: Database): void {
         UPDATE providers SET connector = 'openai-compatible' WHERE connector = 'openai';
         UPDATE providers SET connector = 'anthropic-compatible' WHERE connector = 'anthropic';
         PRAGMA user_version = 5;
+      `);
+    })();
+  }
+
+  // Version 6 remembers a credential its provider refused, so its routes leave routing until a
+  // new credential is stored. Existing providers have never been refused one.
+  if (version < 6) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE providers ADD COLUMN credential_rejected INTEGER NOT NULL DEFAULT 0;
+        PRAGMA user_version = 6;
       `);
     })();
   }

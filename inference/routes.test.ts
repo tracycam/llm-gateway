@@ -169,3 +169,58 @@ test('a model without routes gives an empty list', () => {
     db.close();
   }
 });
+
+/** A connector the gateway signs a provider in with; its login is never used here. */
+function loginConnector(id: string): Connector {
+  return {
+    id,
+    name: id,
+    defaultBaseUrl: null,
+    credential: 'login',
+    login: {
+      async start() { throw new Error('unused'); },
+      async poll() { throw new Error('unused'); },
+    },
+    async target() { throw new Error('unused'); },
+    async models() { return []; },
+  };
+}
+
+test('rule B2: a rejected provider is left out and the second route serves the model', () => {
+  const { db, providers, models } = setup();
+  try {
+    const rejected = addProvider(providers, 'rejected');
+    const healthy = addProvider(providers, 'healthy');
+    const model = models.create({ name: 'model' }, now);
+    models.addRoute(model.id, { providerId: rejected.id, upstreamModel: 'first' });
+    models.addRoute(model.id, { providerId: healthy.id, upstreamModel: 'second' });
+    providers.rejectCredential(rejected.id);
+    const usable = usableRoutes(models.get(model.id)!, providers, (id) => id === 'fake'
+      ? fakeConnector('fake') : null);
+    expect(usable.map(({ route }) => route.upstreamModel)).toEqual(['second']);
+  } finally {
+    db.close();
+  }
+});
+
+test('rule B2: a login provider without a credential is left out until it has one', () => {
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    const providers = new ProviderStore(db);
+    const models = new ModelStore(db);
+    const login = loginConnector('login');
+    const provider = providers.create({
+      name: 'login', connector: login.id, baseUrl: null, credential: null, autoPublish: false,
+    }, now);
+    const model = models.create({ name: 'model' }, now);
+    models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'up' });
+    const found = (id: string) => id === login.id ? login : null;
+    expect(usableRoutes(models.get(model.id)!, providers, found)).toEqual([]);
+    providers.setCredential(provider.id, '{"accessToken":"a"}');
+    expect(usableRoutes(models.get(model.id)!, providers, found).map(({ provider }) => provider.id))
+      .toEqual([provider.id]);
+  } finally {
+    db.close();
+  }
+});

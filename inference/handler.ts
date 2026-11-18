@@ -2,6 +2,7 @@
 import { Abandoned, QueueFull, type Admission } from '../admission';
 import { providerAccess } from '../connectors/access';
 import type { Connector } from '../connectors/connector';
+import type { CredentialRenewals } from '../connectors/tokens';
 import type { KeyRecord, KeyStore } from '../keyStore';
 import { priceOf, type ModelRecord, type ModelStore } from '../modelStore';
 import { costOf, type Usage } from '../pricing';
@@ -39,6 +40,8 @@ export interface InferenceDeps {
   admission: Admission;
   /** The connector with this id, or null. */
   connector(id: string): Connector | null;
+  /** The gateway's one renewal registry, shared by every request on a provider. */
+  renewals: CredentialRenewals;
   /** One attempt on one route. */
   attempt: typeof attempt;
   fetch: typeof fetch;
@@ -259,7 +262,7 @@ async function attemptOn(ctx: Context, route: UsableRoute): Promise<AttemptResul
   try {
     const result = await ctx.deps.attempt({
       connector: route.connector,
-      provider: providerAccess(ctx.deps.providers, route.provider),
+      provider: providerAccess(ctx.deps.providers, route.provider, ctx.deps.renewals),
       upstreamModel: route.route.upstreamModel,
       inbound: ctx.inbound,
       body: ctx.body,

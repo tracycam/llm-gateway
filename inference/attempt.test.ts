@@ -1,12 +1,20 @@
 // Integration tests for one upstream inference attempt.
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { providerAccess } from '../connectors/access';
 import { UpstreamFailure, type Connector, type ProviderAccess } from '../connectors/connector';
+import { CredentialRenewals } from '../connectors/tokens';
+import { ProviderStore } from '../providerStore';
+import { migrate } from '../schema';
+import { AuthorizationServer } from '../testing/authorizationServer';
+import { fakeLoginConnector } from '../testing/loginConnector';
 import { protocolModule, type Protocol } from '../protocols/protocol';
 import { bridgeResponse, bridgeStream, type Bridge } from '../protocols/bridge';
 import { attempt, type AttemptInput } from './attempt';
 
 const provider: ProviderAccess = {
-  id: 'p', baseUrl: null, credential: null, saveCredential: () => {}, model: () => null,
+  id: 'p', baseUrl: null, credential: null, saveCredential: () => {}, rejectCredential: () => {},
+  renewOnce: (renew) => renew(), model: () => null,
 };
 const protocols: Protocol[] = ['chat', 'messages'];
 const event = (type: string, fields: object = {}) =>
@@ -392,4 +400,83 @@ test('stream finished error redacts upstream key without changing stream bytes',
     expect(await new Response(result.body).text()).toBe(content + error);
     expect(await result.finished).toEqual({ usage: null, error: 'echo [redacted]', cancelled: false });
   } finally { s.server.stop(true); }
+});
+
+test("rule B4: an upstream 401 calls the connector's rejected once and fails the route", async () => {
+  const s = stub(() => new Response('{"error":{"message":"bad token"}}', { status: 401 }));
+  try {
+    const req = input(s.server.url.href);
+    let rejected = 0;
+    req.connector.rejected = () => { rejected += 1; };
+    expect(await attempt(req)).toEqual({
+      kind: 'failed', outcome: { kind: 'route' }, status: 401, reason: 'bad token',
+    });
+    expect(rejected).toBe(1);
+  } finally { s.server.stop(true); }
+});
+
+test('rule B4: a 403 does not call rejected', async () => {
+  const s = stub(() => new Response('{}', { status: 403 }));
+  try {
+    const req = input(s.server.url.href);
+    let rejected = 0;
+    req.connector.rejected = () => { rejected += 1; };
+    expect(await attempt(req)).toMatchObject({ kind: 'failed', outcome: { kind: 'route' }, status: 403 });
+    expect(rejected).toBe(0);
+  } finally { s.server.stop(true); }
+});
+
+test('rule B5: a refused renewal marks the provider and fails the route without a token', async () => {
+  const authorization = new AuthorizationServer();
+  const db = new Database(':memory:');
+  try {
+    migrate(db);
+    const providers = new ProviderStore(db);
+    const provider = providers.create({
+      name: 'login', connector: 'fake-login', baseUrl: null, autoPublish: false,
+      credential: JSON.stringify({
+        accessToken: 'spent-access', refreshToken: 'spent-refresh',
+        expiresAt: '2025-01-01T00:00:00.000Z',
+      }),
+    }, new Date('2026-01-01T00:00:00Z'));
+    const { connector } = fakeLoginConnector({
+      deviceEndpoint: authorization.deviceEndpoint,
+      tokenEndpoint: authorization.tokenEndpoint,
+      upstream: 'http://upstream.test',
+      now: () => new Date('2026-01-01T00:00:00Z'),
+    });
+    const result = await attempt({
+      connector,
+      provider: providerAccess(providers, provider, new CredentialRenewals()),
+      upstreamModel: 'up',
+      inbound: 'chat',
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+      clientHeaders: new Headers(),
+      signal: new AbortController().signal,
+      fetch: Object.assign(async () => { throw new Error('not reached'); },
+        { preconnect: fetch.preconnect }),
+      now: () => Date.parse('2026-01-01T00:00:00Z'),
+    });
+    expect(result).toEqual({
+      kind: 'failed', outcome: { kind: 'route' }, status: null,
+      reason: 'Provider login expired; sign in again',
+    });
+    expect(providers.get(provider.id)?.credentialRejected).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('spent-refresh');
+    expect(JSON.stringify(result)).not.toContain('spent-access');
+  } finally {
+    db.close();
+    authorization.close();
+  }
+});
+
+test('rule B5: another target error marks no credential', async () => {
+  const req = input('http://localhost');
+  req.connector.target = async () => { throw new UpstreamFailure('bad target', 401); };
+  let rejected = 0;
+  req.provider = { ...provider, rejectCredential: () => { rejected += 1; } };
+  expect(await attempt(req)).toEqual({
+    kind: 'failed', outcome: { kind: 'route' }, status: null, reason: 'bad target',
+  });
+  expect(rejected).toBe(0);
 });
