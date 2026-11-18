@@ -164,25 +164,28 @@ test('a route gets no price when the discovered price is the model price', () =>
   }
 });
 
-test('a discovered price differing only in a cache field is the route price', () => {
-  const { db, models, providers, provider } = setup();
-  const cached = { ...price, cacheRead: 30 };
-  try {
-    const other = addProvider(providers, 'other');
-    providers.replaceModels(provider.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
-    ], now);
-    providers.replaceModels(other.id, [
-      { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: cached },
-    ], now);
-    models.publish(provider.id, 'up', now);
-    const second = models.publish(other.id, 'up', now);
-    expect(second.price).toEqual(cached);
-    expect(priceOf(second, models.get(second.modelId)!)).toEqual(cached);
-  } finally {
-    db.close();
-  }
-});
+// A difference in any one of the four fields is a difference, so each field gets its own case.
+for (const field of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+  test(`a discovered price differing only in ${field} is the route price`, () => {
+    const { db, models, providers, provider } = setup();
+    const changed = { ...price, [field]: price[field] + 10 };
+    try {
+      const other = addProvider(providers, 'other');
+      providers.replaceModels(provider.id, [
+        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price },
+      ], now);
+      providers.replaceModels(other.id, [
+        { upstreamId: 'up', contextLength: null, maxOutputTokens: null, price: changed },
+      ], now);
+      models.publish(provider.id, 'up', now);
+      const second = models.publish(other.id, 'up', now);
+      expect(second.price).toEqual(changed);
+      expect(priceOf(second, models.get(second.modelId)!)).toEqual(changed);
+    } finally {
+      db.close();
+    }
+  });
+}
 
 test('a discovered price without input or output gives the route no price', () => {
   const { db, models, providers, provider } = setup();
