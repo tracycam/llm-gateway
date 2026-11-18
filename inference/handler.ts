@@ -3,14 +3,16 @@ import { Abandoned, type Admission } from '../admission';
 import { providerAccess } from '../connectors/access';
 import type { Connector } from '../connectors/connector';
 import type { KeyRecord, KeyStore } from '../keyStore';
-import { priceOf, type ModelRecord, type ModelStore, type RouteRecord } from '../modelStore';
+import { priceOf, type ModelRecord, type ModelStore } from '../modelStore';
 import { costOf, type Usage } from '../pricing';
 import { isObject, parseJson, type JsonObject } from '../protocols/json';
 import { protocolModule, type Protocol } from '../protocols/protocol';
-import type { ProviderRecord, ProviderStore } from '../providerStore';
+import type { ProviderStore } from '../providerStore';
 import type { Candidate, Router } from '../router';
 import type { UsageStore } from '../usageStore';
 import type { attempt, AttemptResult } from './attempt';
+import { authenticate } from './auth';
+import { usableRoutes, type UsableRoute } from './routes';
 
 /** Dependencies for a single inference request. */
 export interface InferenceDeps {
@@ -26,18 +28,6 @@ export interface InferenceDeps {
   attempt: typeof attempt;
   fetch: typeof fetch;
   now(): Date;
-}
-
-/** An eligible route and the dependencies needed to invoke it. */
-interface Route {
-  /** Router-facing weight, order and limit. */
-  candidate: Candidate;
-  /** Saved model route. */
-  route: RouteRecord;
-  /** Provider that owns the route. */
-  provider: ProviderRecord;
-  /** Connector for that provider. */
-  connector: Connector;
 }
 
 /** Validated request and its per-request dependencies. */
@@ -57,7 +47,7 @@ interface Context {
   /** Parsed request body. */
   body: JsonObject;
   /** Eligible routes in store order. */
-  routes: Route[];
+  routes: UsableRoute[];
 }
 
 type Failed = Extract<AttemptResult, { kind: 'failed' }>;
@@ -78,33 +68,6 @@ function errorResponse(inbound: Protocol, status: number, message: string, param
   return Response.json(protocolModule(inbound).errorBody(status, message, param), { status });
 }
 
-function authenticate(req: Request, deps: InferenceDeps): KeyRecord | null {
-  const authorization = req.headers.get('authorization');
-  const bearer = authorization?.match(/^Bearer\s+(.+)$/i);
-  const token = bearer?.[1] ?? req.headers.get('x-api-key');
-  if (!token) return null;
-  const result = deps.keys.verify(token, deps.now());
-  return 'key' in result ? result.key : null;
-}
-
-function candidatesOf(model: ModelRecord, deps: InferenceDeps): Route[] {
-  const routes: Route[] = [];
-  model.routes.forEach((route, order) => {
-    if (!route.enabled) return;
-    const provider = deps.providers.get(route.providerId);
-    if (!provider?.enabled) return;
-    const connector = deps.connector(provider.connector);
-    if (!connector) return;
-    routes.push({
-      candidate: { id: route.id, weight: route.weight, order, limit: null },
-      route,
-      provider,
-      connector,
-    });
-  });
-  return routes;
-}
-
 function refusalResponse(ctx: Context): Response | null {
   const prices = ctx.routes.map(({ route }) => priceOf(route, ctx.model));
   const refusal = ctx.deps.keys.refusalFor(ctx.key, ctx.model, prices);
@@ -118,7 +81,7 @@ function refusalResponse(ctx: Context): Response | null {
 
 function record(
   ctx: Context,
-  route: Route,
+  route: UsableRoute,
   status: number,
   error: string | null,
   usage: Usage | null,
@@ -141,7 +104,7 @@ function record(
 }
 
 /** Serve and account for a streaming response. */
-function serveStream(ctx: Context, route: Route, result: Stream): Served {
+function serveStream(ctx: Context, route: UsableRoute, result: Stream): Served {
   const ttftMs = ctx.deps.now().getTime() - ctx.start;
   const response = new Response(result.body, {
     status: 200,
@@ -176,13 +139,13 @@ function served(response: Response): Served {
 }
 
 /** Serve and account for a completed response. */
-function serveComplete(ctx: Context, route: Route, result: Complete): Served {
+function serveComplete(ctx: Context, route: UsableRoute, result: Complete): Served {
   record(ctx, route, 200, null, result.usage, null);
   return served(jsonAnswer(result.body, 200));
 }
 
 /** Serve and account for an upstream rejection. */
-function serveRejected(ctx: Context, route: Route, result: Rejected): Served {
+function serveRejected(ctx: Context, route: UsableRoute, result: Rejected): Served {
   record(ctx, route, result.status, `Upstream rejected the request with ${result.status}`, null, null);
   return served(jsonAnswer(result.body, result.status));
 }
@@ -190,7 +153,7 @@ function serveRejected(ctx: Context, route: Route, result: Rejected): Served {
 /** Serve the last failure or refusal when no more routes can be tried. */
 function serveExhausted(
   ctx: Context,
-  failure: { result: Failed; route: Route } | null,
+  failure: { result: Failed; route: UsableRoute } | null,
   refusal: Refused | null,
 ): Served {
   if (failure) {
@@ -208,7 +171,7 @@ function serveExhausted(
   return served(errorResponse(ctx.inbound, 503, 'No route available'));
 }
 
-async function attemptOn(ctx: Context, route: Route): Promise<AttemptResult> {
+async function attemptOn(ctx: Context, route: UsableRoute): Promise<AttemptResult> {
   const id = route.route.id;
   ctx.deps.router.begin(id);
   let completed: AttemptResult | undefined;
@@ -236,7 +199,7 @@ async function attemptOn(ctx: Context, route: Route): Promise<AttemptResult> {
   }
 }
 
-function routeById(routes: Route[], id: string): Route {
+function routeById(routes: UsableRoute[], id: string): UsableRoute {
   const route = routes.find((item) => item.route.id === id);
   if (!route) throw new Error(`Router selected unknown route ${id}`);
   return route;
@@ -244,11 +207,16 @@ function routeById(routes: Route[], id: string): Route {
 
 async function tryRoutes(ctx: Context): Promise<Served> {
   const tried = new Set<string>();
-  let failure: { result: Failed; route: Route } | null = null;
+  let failure: { result: Failed; route: UsableRoute } | null = null;
   let refusal: Refused | null = null;
+  const candidates: Candidate[] = ctx.routes.map(({ route }, order) => ({
+    id: route.id,
+    weight: route.weight,
+    order,
+    limit: null,
+  }));
   while (true) {
-    const picked = ctx.deps.router.pick(ctx.routes.map(({ candidate }) => candidate), tried,
-      ctx.deps.now().getTime());
+    const picked = ctx.deps.router.pick(candidates, tried, ctx.deps.now().getTime());
     if ('none' in picked) return serveExhausted(ctx, failure, refusal);
     const route = routeById(ctx.routes, picked.route.id);
     const result = await attemptOn(ctx, route);
@@ -273,7 +241,7 @@ export async function handleInference(
   req: Request, inbound: Protocol, deps: InferenceDeps,
 ): Promise<Response> {
   const start = deps.now().getTime();
-  const key = authenticate(req, deps);
+  const key = authenticate(req, deps.keys, deps.now());
   if (!key) return errorResponse(inbound, 401, 'Invalid API key');
   const body = parseJson(await req.text());
   if (!isObject(body)) return errorResponse(inbound, 400, 'Expected a JSON object');
@@ -282,7 +250,7 @@ export async function handleInference(
   }
   const model = deps.models.byName(body.model);
   if (!model?.enabled) return errorResponse(inbound, 404, 'Model not found');
-  const routes = candidatesOf(model, deps);
+  const routes = usableRoutes(model, deps.providers, deps.connector);
   const ctx: Context = { req, inbound, deps, start, key, model, body, routes };
   const refusal = refusalResponse(ctx);
   if (refusal) return refusal;

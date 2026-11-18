@@ -229,29 +229,29 @@ test('rule 5: forbidden model returns 403 even when it has no usable routes', as
   f.db.close();
 });
 
-const keyKinds = ['missing', 'unknown', 'disabled', 'expired', 'cookie-only', 'bearer', 'x-api-key'] as const;
-for (const kind of keyKinds) {
-  test(`rule 1: ${kind} key`, async () => {
-    const f = fixture();
-    const headers = new Headers();
-    if (kind === 'unknown') headers.set('authorization', 'Bearer unknown');
-    if (kind === 'cookie-only') headers.set('cookie', `key=${f.key.token}`);
-    if (kind === 'disabled' || kind === 'expired' || kind === 'bearer') {
-      headers.set('authorization', `Bearer ${f.key.token}`);
-    }
-    if (kind === 'x-api-key') headers.set('x-api-key', f.key.token);
-    if (kind === 'disabled') f.keys.update(f.key.id, { enabled: false }, f.now());
-    if (kind === 'expired') f.keys.update(f.key.id, { expiresAt: f.now().toISOString() }, f.now());
-    const valid = kind === 'bearer' || kind === 'x-api-key';
-    if (valid) f.script(f.routes[0], complete);
-    const req = new Request('http://localhost', { method: 'POST', body: '{"model":"model"}', headers });
-    const { response, text } = await answer(f, req);
-    expect(response.status).toBe(valid ? 200 : 401);
-    expect(response.headers.get('content-type')).toContain('application/json');
-    expect(text).toBe(valid ? '{"answer":"ok"}' : errorBody('chat', 401, 'Invalid API key'));
-    f.db.close();
+test('rule 1: a missing key is 401 in the Chat Completions error shape', async () => {
+  const f = fixture();
+  const req = new Request('http://localhost/v1/chat/completions', {
+    method: 'POST', body: '{"model":"model"}',
   });
-}
+  const { response, text } = await answer(f, req, 'chat');
+  expect(response.status).toBe(401);
+  expect(response.headers.get('content-type')).toContain('application/json');
+  expect(text).toBe(errorBody('chat', 401, 'Invalid API key'));
+  expect(f.calls).toHaveLength(0);
+  f.db.close();
+});
+
+test('rule 1: a refused key is 401 in the Messages error shape', async () => {
+  const f = fixture();
+  f.keys.update(f.key.id, { enabled: false }, f.now());
+  const { response, text } = await answer(f, f.request(), 'messages');
+  expect(response.status).toBe(401);
+  expect(response.headers.get('content-type')).toContain('application/json');
+  expect(text).toBe(errorBody('messages', 401, 'Invalid API key'));
+  expect(f.calls).toHaveLength(0);
+  f.db.close();
+});
 
 for (const [kind, body, invalidModel] of [
   ['malformed JSON', '{', false],
