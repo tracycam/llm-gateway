@@ -1,4 +1,4 @@
-import { HubSnapshot, HubSseEvent, NodeIdentity } from '../server/types';
+import { HubSnapshot, HubSseEvent, NodeIdentity } from '../protocol/types';
 import { NodeLink, NodeLinkOptions, NodeLinkState } from './nodeLink';
 
 /** A daemon the administrator registered. */

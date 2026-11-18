@@ -1,5 +1,5 @@
-import { applyHubEvent } from '../server/hubEvent';
-import { HubSnapshot, HubSseEvent, NodeIdentity } from '../server/types';
+import { applyHubEvent } from '../protocol/hubEvent';
+import { HubSnapshot, HubSseEvent, NodeIdentity } from '../protocol/types';
 
 /** The daemon API version this gateway speaks. */
 export const DAEMON_API_VERSION = 1;

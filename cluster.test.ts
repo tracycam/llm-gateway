@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { HubSseEvent, ServiceInstance } from '../server/types';
+import { HubSseEvent, ServiceInstance } from '../protocol/types';
 import { Cluster, ClusterEvent, NodeRecord } from './cluster';
 import { emptySnapshot, FakeDaemon } from './testing/fakeDaemon';
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import net from 'node:net';
-import { HubSseEvent, ServiceInstance } from '../server/types';
+import { HubSseEvent, ServiceInstance } from '../protocol/types';
 import { NodeLink, NodeLinkOptions, NodeLinkState } from './nodeLink';
 import { emptySnapshot, FakeDaemon } from './testing/fakeDaemon';
 

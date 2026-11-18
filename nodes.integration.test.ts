@@ -8,7 +8,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { freePort, stopDaemon, tempDir } from '../server/testing/fixtures';
 import { removeVolume, StubDaemon, stubVolume, until } from '../server/testing/stubDaemon';
-import type { NodeIdentity } from '../server/types';
+import type { NodeIdentity } from '../protocol/types';
 import type { ClusterEvent, NodeView } from './cluster';
 import { emptySnapshot, FakeDaemon } from './testing/fakeDaemon';
 

@@ -1,11 +1,8 @@
 import path from 'node:path';
 import { controlHeaders, isAuthorized, requireTokenConfig, sessionRoute } from '../server/auth';
 import { VOL1_DIR, WEB_DIST_DIR as DEFAULT_WEB_DIST_DIR } from '../server/config';
-import {
-  errorResponse,
-  jsonResponse,
-  serveAppWebAsset,
-} from '../server/apps/common';
+import { serveAppWebAsset } from '../server/apps/common';
+import { errorResponse, jsonResponse } from './http';
 import { handleAnthropicMessages } from './anthropicAdapter';
 import { Cluster } from './cluster';
 import { migrateGatewayDataDir } from './dataDir';

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { errorResponse, jsonResponse } from '../server/apps/common';
+import { errorResponse, jsonResponse } from './http';
 import { Cluster, NodeRecord } from './cluster';
 import { fetchNodeIdentity } from './nodeLink';
 import { NodeStore } from './nodeStore';

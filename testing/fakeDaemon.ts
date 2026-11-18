@@ -1,5 +1,5 @@
 // A daemon as the gateway sees it: the node identity route and an event stream the test drives.
-import { HubSnapshot, HubSseEvent, NodeIdentity } from '../../server/types';
+import { HubSnapshot, HubSseEvent, NodeIdentity } from '../../protocol/types';
 
 export function emptySnapshot(patch: Partial<HubSnapshot> = {}): HubSnapshot {
   return {
