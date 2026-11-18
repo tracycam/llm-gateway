@@ -54,13 +54,20 @@ function failed(outcome: Outcome, status: number | null, reason: string): Attemp
   return { kind: 'failed', outcome, status, reason };
 }
 
-function redact(text: string, target: UpstreamTarget): string {
-  const secrets = Object.entries(target.headers).filter(([name]) => AUTH_HEADERS.includes(name.toLowerCase()))
+/** Collect upstream authentication values, longest first to redact bearer tokens completely. */
+function secretsOf(target: UpstreamTarget): string[] {
+  return Object.entries(target.headers)
+    .filter(([name]) => AUTH_HEADERS.includes(name.toLowerCase()))
     .flatMap(([, value]) => {
-    const bearer = /^Bearer\s+(.+)$/i.exec(value);
-    return bearer ? [value, bearer[1]] : [value];
-  }).filter(Boolean).sort((a, b) => b.length - a.length);
-  for (const secret of secrets) text = text.replaceAll(secret, '[redacted]');
+      const bearer = /^Bearer\s+(.+)$/i.exec(value);
+      return bearer ? [value, bearer[1]] : [value];
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+}
+
+function redact(text: string, target: UpstreamTarget): string {
+  for (const secret of secretsOf(target)) text = text.replaceAll(secret, '[redacted]');
   return text;
 }
 
@@ -138,6 +145,7 @@ async function answer(
   clientWantsUsage: boolean,
 ): Promise<AttemptResult> {
   if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
     return failed({ kind: 'route' }, response.status, 'Upstream returned a redirect');
   }
   if (!response.ok || !stream) return readAnswer(input, target, bridge, response);

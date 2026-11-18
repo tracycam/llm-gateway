@@ -286,3 +286,49 @@ test('rule 11: redact authentication in failures and rejections, not complete an
     expect(await attempt(req)).toEqual({ kind: 'complete', body: text, usage: null });
   } finally { s.server.stop(true); }
 });
+
+test('default output limit: Chat to Messages uses 4096 when unknown', async () => {
+  const s = stub(() => new Response('{}'));
+  try {
+    await attempt(input(s.server.url.href, 'chat', 'messages'));
+    expect(JSON.parse(s.requests[0].body).max_tokens).toBe(4096);
+  } finally { s.server.stop(true); }
+});
+
+test('streaming error statuses are read as errors, never opened as streams', async () => {
+  let status = 429;
+  const text = '{"error":{"message":"bad request"}}';
+  const s = stub(() => new Response(text, { status, headers: { 'retry-after': '2' } }));
+  try {
+    const req = input(s.server.url.href);
+    req.body = { messages: [{ role: 'user', content: 'hi' }], stream: true };
+    expect(await attempt(req)).toEqual({
+      kind: 'failed', outcome: { kind: 'rate-limited', retryAfterMs: 2000 },
+      status: 429, reason: 'bad request' });
+    status = 400;
+    expect(await attempt(req)).toEqual({ kind: 'rejected', status: 400, body: text });
+  } finally { s.server.stop(true); }
+});
+
+test('x-api-key echoed in an upstream error is redacted', async () => {
+  const s = stub(() => new Response('{"error":{"message":"secret-key"}}', { status: 429 }));
+  try {
+    const req = input(s.server.url.href);
+    req.connector.target = async () => ({ url: s.server.url.href, protocol: 'chat',
+      headers: { 'x-api-key': 'secret-key' } });
+    expect(await attempt(req)).toEqual({
+      kind: 'failed', outcome: { kind: 'rate-limited', retryAfterMs: null },
+      status: 429, reason: '[redacted]' });
+  } finally { s.server.stop(true); }
+});
+
+test('redirect response body is cancelled', async () => {
+  let cancelled = false;
+  const req = input('http://localhost');
+  req.fetch = Object.assign(async () => new Response(new ReadableStream({
+    cancel() { cancelled = true; },
+  }), { status: 302 }), { preconnect: fetch.preconnect });
+  expect(await attempt(req)).toEqual({ kind: 'failed', outcome: { kind: 'route' }, status: 302,
+    reason: 'Upstream returned a redirect' });
+  expect(cancelled).toBe(true);
+});
