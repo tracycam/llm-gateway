@@ -9,13 +9,12 @@ beforeEach(() => {
 afterEach(() => { server.stop(true); });
 
 const metadata = [
-  ['openai', 'https://api.openai.com/v1', 'api-key'],
-  ['anthropic', 'https://api.anthropic.com', 'api-key'],
-  ['openrouter', 'https://openrouter.ai/api/v1', 'api-key'],
+  ['openai-compatible', 'https://api.openai.com/v1', 'optional-api-key'],
+  ['anthropic-compatible', 'https://api.anthropic.com', 'optional-api-key'],
   ['xai', 'https://api.x.ai/v1', 'api-key'],
   ['opencode', 'https://opencode.ai/inference', 'api-key'],
   ['opencode-go', 'https://opencode.ai/inference/go', 'api-key'],
-  ['openai-compatible', null, 'optional-api-key'],
+  ['openrouter', 'https://openrouter.ai/api/v1', 'api-key'],
 ] as const;
 
 const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'api-key', 'cookie'];
@@ -47,7 +46,12 @@ test('no connector asks the client for a credential header', () => {
 });
 
 test('connectorById returns the registered connector', () => {
-  expect(connectorById('openai')).toBe(CONNECTORS[0]);
+  expect(connectorById('openai-compatible')).toBe(CONNECTORS[0]);
+});
+
+test('the retired connector ids are not registered', () => {
+  expect(connectorById('openai')).toBeNull();
+  expect(connectorById('anthropic')).toBeNull();
 });
 
 test('connectorById returns null for a missing id', () => {

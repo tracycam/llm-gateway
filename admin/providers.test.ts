@@ -1,8 +1,10 @@
 // Provider management uses the real SQLite stores.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
+import { providerAccess } from '../connectors/access';
 import type { Connector } from '../connectors/connector';
 import { UpstreamFailure } from '../connectors/connector';
+import { CONNECTORS, connectorById } from '../connectors/registry';
 import { ModelStore } from '../modelStore';
 import { KeyStore } from '../keyStore';
 import { ProviderStore } from '../providerStore';
@@ -173,6 +175,72 @@ test('GET connectors returns only form fields', async () => {
   }] });
   expect(deps.providers.list()).toHaveLength(0);
   db.close();
+});
+
+/** The fixture's stores with the gateway's own connector registry. */
+function registryFixture(): { db: Database; deps: AdminDeps } {
+  const { db, deps } = fixture();
+  return { db, deps: { ...deps, connector: connectorById, connectors: () => CONNECTORS } };
+}
+
+test('GET connectors lists the six API-key connectors in administrator order', async () => {
+  const { deps, db } = registryFixture();
+  try {
+    const response = await handleProviderRoute(request('/connectors'), deps);
+    expect(await response?.json()).toEqual({ connectors: [
+      { id: 'openai-compatible', name: 'OpenAI-compatible',
+        defaultBaseUrl: 'https://api.openai.com/v1', credential: 'optional-api-key' },
+      { id: 'anthropic-compatible', name: 'Anthropic-compatible',
+        defaultBaseUrl: 'https://api.anthropic.com', credential: 'optional-api-key' },
+      { id: 'xai', name: 'xAI', defaultBaseUrl: 'https://api.x.ai/v1', credential: 'api-key' },
+      { id: 'opencode', name: 'OpenCode Zen',
+        defaultBaseUrl: 'https://opencode.ai/inference', credential: 'api-key' },
+      { id: 'opencode-go', name: 'OpenCode Go',
+        defaultBaseUrl: 'https://opencode.ai/inference/go', credential: 'api-key' },
+      { id: 'openrouter', name: 'OpenRouter',
+        defaultBaseUrl: 'https://openrouter.ai/api/v1', credential: 'api-key' },
+    ] });
+    expect(deps.providers.list()).toHaveLength(0);
+  } finally {
+    db.close();
+  }
+});
+
+test('a provider on a retired connector id is refused', async () => {
+  const { deps, db } = registryFixture();
+  try {
+    for (const connector of ['openai', 'anthropic']) {
+      const response = await handleProviderRoute(request('/providers', 'POST', {
+        name: `p-${connector}`, connector, apiKey: 'key',
+      }), deps);
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toEqual({ error: 'connector 无效' });
+    }
+    expect(deps.providers.list()).toHaveLength(0);
+  } finally {
+    db.close();
+  }
+});
+
+test('a keyless provider with no address resolves to the connector default', async () => {
+  const { deps, db } = registryFixture();
+  try {
+    const response = await handleProviderRoute(request('/providers', 'POST', {
+      name: 'official', connector: 'openai-compatible',
+    }), deps);
+    expect(response?.status).toBe(201);
+    const { provider } = await response!.json();
+    expect(provider).toMatchObject({
+      connector: 'openai-compatible', baseUrl: null, hasCredential: false,
+    });
+    const stored = deps.providers.get(provider.id)!;
+    const connector = connectorById(stored.connector)!;
+    const target = await connector.target(providerAccess(deps.providers, stored), 'gpt', 'chat');
+    expect(target.url).toBe('https://api.openai.com/v1/chat/completions');
+    expect(target.headers).toEqual({});
+  } finally {
+    db.close();
+  }
 });
 
 test('POST publish creates a route and GET models marks it published', async () => {

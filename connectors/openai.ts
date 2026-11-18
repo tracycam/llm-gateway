@@ -101,14 +101,6 @@ function connector(vendor: Vendor): Connector {
   };
 }
 
-/** OpenAI's Chat Completions API. */
-export const openai = connector({
-  id: 'openai',
-  name: 'OpenAI',
-  defaultBaseUrl: 'https://api.openai.com/v1',
-  keyRequired: true,
-  model: openaiModel,
-});
 /** OpenRouter's Chat Completions API. */
 export const openrouter = connector({
   id: 'openrouter',
@@ -125,11 +117,15 @@ export const xai = connector({
   keyRequired: true,
   model: xaiModel,
 });
-/** An administrator-configured Chat Completions server. */
+/**
+ * The OpenAI API and every server that speaks its Chat Completions protocol. The address is the
+ * official one until the administrator gives another; the key is optional because a server on
+ * the local network may need none, and no key means no `Authorization` header at all.
+ */
 export const openaiCompatible = connector({
   id: 'openai-compatible',
   name: 'OpenAI-compatible',
-  defaultBaseUrl: null,
+  defaultBaseUrl: 'https://api.openai.com/v1',
   keyRequired: false,
   model: openaiModel,
 });

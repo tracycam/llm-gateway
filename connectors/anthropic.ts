@@ -3,7 +3,7 @@ import { isObject } from '../protocols/json';
 import { UpstreamFailure } from './connector';
 import type { Connector, ProviderAccess } from './connector';
 import type { ProviderModelInput } from '../providerStore';
-import { endpoint, fetchModels, positiveNumber, requiredApiKey } from './http';
+import { endpoint, fetchModels, optionalApiKey, positiveNumber } from './http';
 
 /** The version in current examples, documented in docs/gateway-connectors.md §2. */
 export const ANTHROPIC_VERSION = '2026-10-21';
@@ -13,16 +13,15 @@ const BASE = 'https://api.anthropic.com';
 interface ModelRequest {
   url: string;
   headers: Record<string, string>;
-  key: string;
+  key: string | null;
 }
 
+/** Anthropic's headers with the key only when the provider has one. */
 function request(provider: ProviderAccess, path: string): ModelRequest {
-  const key = requiredApiKey(provider);
-  return {
-    url: endpoint(provider, BASE, path),
-    headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION },
-    key,
-  };
+  const key = optionalApiKey(provider);
+  const headers: Record<string, string> = { 'anthropic-version': ANTHROPIC_VERSION };
+  if (key !== null) headers['x-api-key'] = key;
+  return { url: endpoint(provider, BASE, path), headers, key };
 }
 
 async function modelsPage(provider: ProviderAccess, after: string | null): Promise<{
@@ -53,12 +52,16 @@ async function modelsPage(provider: ProviderAccess, after: string | null): Promi
   return { models, next: body.last_id };
 }
 
-/** Anthropic's Messages API. */
-export const anthropic: Connector = {
-  id: 'anthropic',
-  name: 'Anthropic',
+/**
+ * The Anthropic Messages API and the servers that speak it. The address is Anthropic's until the
+ * administrator gives another; the key is optional because a local server may need none, and no
+ * key means no `x-api-key` header at all.
+ */
+export const anthropicCompatible: Connector = {
+  id: 'anthropic-compatible',
+  name: 'Anthropic-compatible',
   defaultBaseUrl: BASE,
-  credential: 'api-key',
+  credential: 'optional-api-key',
   async target(provider) {
     const { url, headers } = request(provider, '/v1/messages');
     return { url, headers, protocol: 'messages' };

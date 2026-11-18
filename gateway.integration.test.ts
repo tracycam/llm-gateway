@@ -352,7 +352,8 @@ test('4. a Messages stream with a tool is translated to a well-formed Messages s
 }, 20_000);
 
 test('5. an Anthropic provider passes Messages through byte for byte and serves Chat by translation', async () => {
-  messagesProviderId = await createProvider('anthropic', anthropic.url, 'messages upstream', PROVIDER_KEY);
+  messagesProviderId = await createProvider(
+    'anthropic-compatible', anthropic.url, 'messages upstream', PROVIDER_KEY);
   await adminJson(`/api/gateway/providers/${messagesProviderId}/refresh`, 'POST');
   messagesModelId = await publishModel(messagesProviderId, 'upstream-messages');
 

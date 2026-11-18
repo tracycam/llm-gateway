@@ -1,10 +1,10 @@
-// Builds gateway databases exactly as the retired GatewayStore wrote version 2, and a version-3
-// database on top of that shape, so migration tests start from what exists in the field rather
-// than from today's schema.
+// Builds gateway databases exactly as the retired GatewayStore wrote version 2, a version-3
+// database on top of that shape and an empty version-4 database built through the migration, so
+// migration tests start from what exists in the field rather than from today's schema.
 import { createHash } from 'node:crypto';
 import { Database } from 'bun:sqlite';
 import { openGatewayDatabase } from '../database';
-import { version3DDL } from '../schema';
+import { migrate, version3DDL } from '../schema';
 
 /** The key the legacy database holds; its plaintext is gone from the file but its hash verifies. */
 export const LEGACY_TOKEN = 'sk-gw-legacy-token-0123456789abcdef';
@@ -80,6 +80,18 @@ export function openVersion3Database(): Database {
   const db = new Database(':memory:');
   db.exec(VERSION_2_DDL);
   db.exec(version3DDL);
+  return db;
+}
+
+/**
+ * An empty in-memory version-4 database. Version 5 renames connector ids in rows only, so the
+ * version-4 schema is the version-5 schema; the migration is run to build it and the version is
+ * then set back to 4.
+ */
+export function openVersion4Database(): Database {
+  const db = openVersion3Database();
+  migrate(db);
+  db.exec('PRAGMA user_version = 4');
   return db;
 }
 

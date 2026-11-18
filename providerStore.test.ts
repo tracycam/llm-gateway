@@ -4,7 +4,10 @@ import { migrate, StoreRefusal } from './schema';
 import { ProviderStore } from './providerStore';
 
 const now = new Date('2024-01-01T00:00:00Z');
-const input = { name: 'provider', connector: 'openai', baseUrl: 'https://example.com', credential: 'secret-value', autoPublish: false };
+const input = {
+  name: 'provider', connector: 'openai-compatible', baseUrl: 'https://example.com',
+  credential: 'secret-value', autoPublish: false,
+};
 
 test('provider results never contain credentials', () => {
   const db = new Database(':memory:');

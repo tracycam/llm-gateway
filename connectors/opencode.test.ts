@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import pkg from '../../package.json';
 import type { Protocol } from '../protocols/protocol';
 import { attempt, type AttemptInput } from '../inference/attempt';
-import { anthropic } from './anthropic';
+import { anthropicCompatible } from './anthropic';
 import { UpstreamFailure } from './connector';
 import type { Connector, ProviderAccess } from './connector';
 import { opencode, opencodeGo } from './opencode';
@@ -167,9 +167,9 @@ for (const preset of presets) {
     });
   });
 
-  test(`${preset.id} Messages target sends the anthropic connector's version`, async () => {
+  test(`${preset.id} Messages target sends the anthropic-compatible connector's version`, async () => {
     const s = stub(() => new Response());
-    const direct = await anthropic.target(access(preset, s.base), 'm', 'messages');
+    const direct = await anthropicCompatible.target(access(preset, s.base), 'm', 'messages');
     const target = await preset.connector.target(access(preset, s.base), 'm', 'messages');
     expect(target.headers['anthropic-version']).toBe(direct.headers['anthropic-version']);
   });

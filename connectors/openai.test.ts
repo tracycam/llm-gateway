@@ -2,8 +2,8 @@
 import { afterEach, expect, test } from 'bun:test';
 import type { ProviderAccess } from './connector';
 import { UpstreamFailure } from './connector';
-import { openai, openaiCompatible, openrouter, xai } from './openai';
-import { anthropic } from './anthropic';
+import { openaiCompatible, openrouter, xai } from './openai';
+import { anthropicCompatible } from './anthropic';
 import { CONNECTORS } from './registry';
 
 let server: ReturnType<typeof Bun.serve> | null = null;
@@ -20,49 +20,85 @@ function provider(
   return { id: 'test', baseUrl, credential, saveCredential() {}, model() { return null; } };
 }
 
-test('base override strips trailing slashes and sends bearer authentication', async () => {
+/** The URLs a call asks the global fetch for, answered without network access. */
+async function intercepted(call: () => Promise<unknown>): Promise<string[]> {
+  const urls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: Request | URL | string) => {
+    urls.push(input instanceof Request ? input.url : String(input));
+    return Response.json({ data: [] });
+  }) as typeof fetch;
+  try {
+    await call();
+  } finally {
+    globalThis.fetch = original;
+  }
+  return urls;
+}
+
+test('a provider without an address uses the default address for inference', async () => {
+  expect(await openaiCompatible.target(provider(null), 'm', 'chat')).toEqual({
+    url: 'https://api.openai.com/v1/chat/completions',
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'chat',
+  });
+});
+
+test('model discovery uses the default address when the provider has none', async () => {
+  const urls = await intercepted(() => openaiCompatible.models(provider(null)));
+  expect(urls).toEqual(['https://api.openai.com/v1/models']);
+});
+
+test('a custom address overrides the default and trailing slashes are stripped', async () => {
   const requests: Request[] = [];
   const base = stub((req) => {
     requests.push(new Request(req.url, req));
     return Response.json({ data: [] });
   });
-  const access = provider(`${base}///`);
-  expect(await openai.target(access, 'm', 'chat')).toEqual({
-    url: `${base}/chat/completions`, headers: { Authorization: 'Bearer secret-key' }, protocol: 'chat',
+  expect(await openaiCompatible.target(provider(`${base}///`), 'm', 'chat')).toEqual({
+    url: `${base}/chat/completions`,
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'chat',
   });
-  await openai.models(access);
+  await openaiCompatible.models(provider(base));
   expect(requests[0]?.method).toBe('GET');
   expect(new URL(requests[0]!.url).pathname).toBe('/models');
   expect(requests[0]?.headers.get('authorization')).toBe('Bearer secret-key');
 });
 
-test('optional key omits Authorization and requires a base', async () => {
-  const requests: Request[] = [];
+test('without a key no Authorization header is sent', async () => {
+  const auth: (string | null)[] = [];
   const base = stub((req) => {
-    requests.push(new Request(req.url, req));
+    auth.push(req.headers.get('authorization'));
     return Response.json({ data: [] });
   });
   const access = provider(base, null);
   expect((await openaiCompatible.target(access, 'm', 'chat')).headers).toEqual({});
   await openaiCompatible.models(access);
-  expect(requests[0]?.headers.has('authorization')).toBe(false);
-  await expect(openaiCompatible.target(provider(null, null), 'm', 'chat'))
-    .rejects.toBeInstanceOf(UpstreamFailure);
+  expect(auth).toEqual([null]);
 });
 
-test('OpenAI and compatible parse context aliases and skip invalid ids', async () => {
+test('with a key discovery sends Authorization', async () => {
+  const auth: (string | null)[] = [];
+  const base = stub((req) => {
+    auth.push(req.headers.get('authorization'));
+    return Response.json({ data: [] });
+  });
+  await openaiCompatible.models(provider(base));
+  expect(auth[0]).toBe('Bearer secret-key');
+});
+
+test('context aliases are parsed and invalid ids skipped', async () => {
   const base = stub(() => Response.json({ data: [
     { id: 'a', context_length: 100 }, { id: 'b', context_window: 200 },
     { id: 'c', max_model_len: 300 }, { id: 'd', context_length: -1 }, { id: 1 },
   ] }));
-  for (const connector of [openai, openaiCompatible]) {
-    const models = await connector.models(provider(base));
-    expect(models.map((m) => m.contextLength)).toEqual([100, 200, 300, null]);
-    expect(models[0]).toEqual({
-      upstreamId: 'a', contextLength: 100, maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null },
-    });
-  }
+  const models = await openaiCompatible.models(provider(base));
+  expect(models.map((m) => m.contextLength)).toEqual([100, 200, 300, null]);
+  expect(models[0]).toEqual({
+    upstreamId: 'a', contextLength: 100, maxOutputTokens: null,
+    price: { input: null, output: null, cacheRead: null },
+  });
 });
 
 test('OpenRouter converts per-token prices, including free, dynamic and invalid prices', async () => {
@@ -97,7 +133,7 @@ test('xAI converts cents per 100 million tokens and leaves missing prices unknow
 test('401 carries upstream message and status without leaking the credential', async () => {
   const base = stub(() => Response.json({ error: { message: 'denied' } }, { status: 401 }));
   try {
-    await openai.models(provider(base));
+    await openaiCompatible.models(provider(base));
     throw new Error('expected failure');
   } catch (error) {
     expect(error).toBeInstanceOf(UpstreamFailure);
@@ -109,12 +145,12 @@ test('401 carries upstream message and status without leaking the credential', a
 
 test('upstream error text cannot echo the credential', async () => {
   const base = stub(() => Response.json({ error: { message: 'secret-key rejected' } }, { status: 401 }));
-  await expect(openai.models(provider(base))).rejects.toThrow('[redacted] rejected');
+  await expect(openaiCompatible.models(provider(base))).rejects.toThrow('[redacted] rejected');
 });
 
 test('500 without a body is a status-bearing failure', async () => {
   const base = stub(() => new Response(null, { status: 500 }));
-  await expect(openai.models(provider(base))).rejects.toMatchObject({ status: 500 });
+  await expect(openaiCompatible.models(provider(base))).rejects.toMatchObject({ status: 500 });
 });
 
 test('302 is not followed', async () => {
@@ -123,7 +159,7 @@ test('302 is not followed', async () => {
     if (new URL(req.url).pathname === '/destination') redirected++;
     return new Response(null, { status: 302, headers: { Location: '/destination' } });
   });
-  await expect(openai.models(provider(base))).rejects.toMatchObject({ status: 302 });
+  await expect(openaiCompatible.models(provider(base))).rejects.toMatchObject({ status: 302 });
   expect(redirected).toBe(0);
 });
 
@@ -131,30 +167,29 @@ test('connection refused is an upstream failure with null status', async () => {
   const base = stub(() => new Response());
   server!.stop(true);
   server = null;
-  await expect(openai.models(provider(base))).rejects.toMatchObject({ status: null });
+  await expect(openaiCompatible.models(provider(base))).rejects.toMatchObject({ status: null });
 });
 
 test('invalid JSON and missing data are rejected', async () => {
   let invalidJson = true;
   const base = stub(() => invalidJson ? new Response('not json') : Response.json({ models: [] }));
-  await expect(openai.models(provider(base))).rejects.toBeInstanceOf(UpstreamFailure);
+  await expect(openaiCompatible.models(provider(base))).rejects.toBeInstanceOf(UpstreamFailure);
   invalidJson = false;
-  await expect(openai.models(provider(base))).rejects.toBeInstanceOf(UpstreamFailure);
+  await expect(openaiCompatible.models(provider(base))).rejects.toBeInstanceOf(UpstreamFailure);
 });
 
-test('missing and malformed credentials reject both operations', async () => {
+test('a malformed credential rejects both operations', async () => {
   const base = stub(() => Response.json({ data: [] }));
-  for (const credential of [null, 'not json', '{}', '{"apiKey":42}', '{"apiKey":""}']) {
+  for (const credential of ['not json', '{}', '{"apiKey":42}', '{"apiKey":""}']) {
     const access = provider(base, credential);
-    await expect(openai.target(access, 'm', 'chat')).rejects.toMatchObject({ status: null });
-    await expect(openai.models(access)).rejects.toMatchObject({ status: null });
+    await expect(openaiCompatible.target(access, 'm', 'chat')).rejects.toMatchObject({ status: null });
+    await expect(openaiCompatible.models(access)).rejects.toMatchObject({ status: null });
   }
-  await expect(openaiCompatible.models(provider(base, '{}'))).rejects.toBeInstanceOf(UpstreamFailure);
 });
 
 // Where a Chat client's request lands, for the connectors whose base is not a Chat root.
 const CHAT_CLIENT_PATH: Record<string, string> = {
-  anthropic: '/v1/messages',
+  'anthropic-compatible': '/v1/messages',
   opencode: '/openai/v1/chat/completions',
   'opencode-go': '/openai/v1/chat/completions',
 };
@@ -168,34 +203,19 @@ for (const connector of CONNECTORS) {
   test(`${connector.id} target sends its authentication header`, async () => {
     const base = stub(() => Response.json({ data: [] }));
     const target = await connector.target(provider(base), 'm', 'chat');
-    if (connector.id === 'anthropic') expect(target.headers['x-api-key']).toBe('secret-key');
+    if (connector.id === 'anthropic-compatible') expect(target.headers['x-api-key']).toBe('secret-key');
     else expect(target.headers.Authorization).toBe('Bearer secret-key');
   });
   test(`${connector.id} model discovery sends its authentication header`, async () => {
     const auth: (string | null)[] = [];
     const base = stub((req) => {
-      auth.push(req.headers.get(connector.id === 'anthropic' ? 'x-api-key' : 'authorization'));
+      auth.push(req.headers.get(connector.id === 'anthropic-compatible' ? 'x-api-key' : 'authorization'));
       return Response.json({ data: [], has_more: false });
     });
     await connector.models(provider(base));
-    expect(auth[0]).toBe(connector.id === 'anthropic' ? 'secret-key' : 'Bearer secret-key');
+    expect(auth[0]).toBe(connector.id === 'anthropic-compatible' ? 'secret-key' : 'Bearer secret-key');
   });
 }
-
-test('compatible with key sends Authorization', async () => {
-  const auth: (string | null)[] = [];
-  const base = stub((req) => {
-    auth.push(req.headers.get('authorization'));
-    return Response.json({ data: [] });
-  });
-  await openaiCompatible.models(provider(base));
-  expect(auth[0]).toBe('Bearer secret-key');
-});
-
-test('compatible without a base fails discovery', async () => {
-  stub(() => new Response());
-  await expect(openaiCompatible.models(provider(null, null))).rejects.toBeInstanceOf(UpstreamFailure);
-});
 
 for (const [text, expected] of [
   ['0.000008', 8], ['0.0000025', 2.5], ['0', 0], ['-1', null], ['abc', null], [null, null],
@@ -235,29 +255,27 @@ test('OpenRouter per-token prices are rounded to exact-looking USD per million',
   expect(price.cacheRead).toBe(0.05);
 });
 
-for (const connector of [openai, openaiCompatible, openrouter, xai, anthropic]) {
+for (const connector of [openaiCompatible, openrouter, xai, anthropicCompatible]) {
   test(`${connector.id} skips entries without a string id`, async () => {
     const base = stub(() => Response.json({ data: [{ id: 'valid' }, { id: 7 }, {}, null], has_more: false }));
     expect((await connector.models(provider(base))).map((model) => model.upstreamId)).toEqual(['valid']);
   });
 }
 
-for (const connector of [openai, openaiCompatible]) {
-  test(`${connector.id} parses a realistic model list`, async () => {
-    const base = stub(() => Response.json({
-      object: 'list',
-      data: [{ id: 'model', object: 'model', owned_by: 'provider', context_window: 8192 }],
-    }));
-    expect(await connector.models(provider(base))).toEqual([{
-      upstreamId: 'model',
-      contextLength: 8192,
-      maxOutputTokens: null,
-      price: { input: null, output: null, cacheRead: null },
-    }]);
-  });
-}
+test('a realistic model list is parsed', async () => {
+  const base = stub(() => Response.json({
+    object: 'list',
+    data: [{ id: 'model', object: 'model', owned_by: 'provider', context_window: 8192 }],
+  }));
+  expect(await openaiCompatible.models(provider(base))).toEqual([{
+    upstreamId: 'model',
+    contextLength: 8192,
+    maxOutputTokens: null,
+    price: { input: null, output: null, cacheRead: null },
+  }]);
+});
 
-for (const connector of [openai, anthropic]) {
+for (const connector of [openaiCompatible, anthropicCompatible]) {
   test(`${connector.id} 401 carries upstream message and status`, async () => {
     const base = stub(() => Response.json({ error: { message: 'denied' } }, { status: 401 }));
     await expect(connector.models(provider(base))).rejects.toMatchObject({
@@ -297,11 +315,6 @@ for (const connector of [openai, anthropic]) {
     await expect(connector.models(provider(base))).rejects.toMatchObject({
       message: 'Invalid model list', status: null,
     });
-  });
-  test(`${connector.id} missing credential fails target and models`, async () => {
-    const base = stub(() => new Response());
-    await expect(connector.target(provider(base, null), 'm', 'chat')).rejects.toMatchObject({ status: null });
-    await expect(connector.models(provider(base, null))).rejects.toMatchObject({ status: null });
   });
   test(`${connector.id} malformed credential fails target and models`, async () => {
     const base = stub(() => new Response());

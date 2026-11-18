@@ -7,10 +7,13 @@ import { openGatewayDatabase } from './database';
 import { Database } from 'bun:sqlite';
 import { migrate } from './schema';
 import {
-  LEGACY_KEY_ID, LEGACY_MODELLED, LEGACY_NODE, openVersion3Database, writeLegacyDatabase,
+  LEGACY_KEY_ID, LEGACY_MODELLED, LEGACY_NODE, openVersion3Database, openVersion4Database,
+  writeLegacyDatabase,
 } from './testing/legacy';
 import { ModelStore } from './modelStore';
 import { ProviderStore } from './providerStore';
+import { connectorById } from './connectors/registry';
+import { usableRoutes } from './inference/routes';
 
 test('version 2 migration preserves key, node and request log', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-migration-'));
@@ -48,17 +51,17 @@ test('migration is idempotent', () => {
     const before = db.query('SELECT type, name, sql FROM sqlite_master ORDER BY name').all();
     migrate(db);
     expect(db.query('SELECT type, name, sql FROM sqlite_master ORDER BY name').all()).toEqual(before);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 4 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
   } finally {
     db.close();
   }
 });
 
-test('migration refuses version 5', () => {
+test('migration refuses version 6', () => {
   const db = new Database(':memory:');
   try {
-    db.exec('PRAGMA user_version = 5');
-    expect(() => migrate(db)).toThrow('Unsupported gateway database version: 5');
+    db.exec('PRAGMA user_version = 6');
+    expect(() => migrate(db)).toThrow('Unsupported gateway database version: 6');
   } finally {
     db.close();
   }
@@ -137,7 +140,7 @@ test('version 0 remains retryable if WAL purge is blocked', () => {
       expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 0 });
       reader.exec('ROLLBACK');
       migrate(db);
-      expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 4 });
+      expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
     } finally {
       reader.close();
       db.close();
@@ -234,7 +237,7 @@ test('version 4 drops every cache-write column', () => {
     for (const table of ['usage_daily', 'request_logs', 'models', 'routes', 'provider_models']) {
       expect(columnsOf(db, table).filter((name) => name.startsWith('cache_write'))).toEqual([]);
     }
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 4 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
   } finally {
     db.close();
   }
@@ -264,6 +267,63 @@ test('version 4 leaves the key and gateway totals alone, which already sum all i
       .toEqual({ prompt_tokens: 100, completion_tokens: 20 });
     expect(db.query('SELECT request_count, prompt_tokens, completion_tokens, cost FROM gateway_totals').get())
       .toEqual({ request_count: 3, prompt_tokens: 100, completion_tokens: 20, cost: 0.5 });
+  } finally {
+    db.close();
+  }
+});
+
+/** A version-4 database holding providers on the connector ids version 5 renames. */
+function version4WithProviders(): Database {
+  const db = openVersion4Database();
+  db.exec(`
+    INSERT INTO providers (id, name, connector, base_url, credential, created_at) VALUES
+      ('p-default', 'official default', 'openai', NULL, '{"apiKey":"a"}', 'now'),
+      ('p-address', 'official address', 'openai', 'https://proxy.example/v1', NULL, 'now'),
+      ('p-messages', 'anthropic', 'anthropic', NULL, '{"apiKey":"b"}', 'now'),
+      ('p-openrouter', 'openrouter', 'openrouter', 'https://openrouter.ai/api/v1', '{"apiKey":"c"}', 'now');
+    INSERT INTO models (id, name, created_at) VALUES ('m', 'model', 'now');
+    INSERT INTO routes (id, model_id, provider_id, upstream_model) VALUES
+      ('r', 'm', 'p-default', 'gpt');
+  `);
+  return db;
+}
+
+test('version 5 renames the two protocol connector ids and leaves the rows alone', () => {
+  const db = version4WithProviders();
+  try {
+    migrate(db);
+    expect(db.query('SELECT id, connector, base_url, credential FROM providers ORDER BY id').all())
+      .toEqual([
+        { id: 'p-address', connector: 'openai-compatible',
+          base_url: 'https://proxy.example/v1', credential: null },
+        { id: 'p-default', connector: 'openai-compatible',
+          base_url: null, credential: '{"apiKey":"a"}' },
+        { id: 'p-messages', connector: 'anthropic-compatible',
+          base_url: null, credential: '{"apiKey":"b"}' },
+        { id: 'p-openrouter', connector: 'openrouter',
+          base_url: 'https://openrouter.ai/api/v1', credential: '{"apiKey":"c"}' },
+      ]);
+    expect(db.query('SELECT id, provider_id, upstream_model FROM routes').all())
+      .toEqual([{ id: 'r', provider_id: 'p-default', upstream_model: 'gpt' }]);
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
+    const renamed = db.query('SELECT id, connector FROM providers ORDER BY id').all();
+    migrate(db);
+    expect(db.query('SELECT id, connector FROM providers ORDER BY id').all()).toEqual(renamed);
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 5 });
+  } finally {
+    db.close();
+  }
+});
+
+test('version 5 leaves a renamed provider usable on its route', () => {
+  const db = version4WithProviders();
+  try {
+    migrate(db);
+    const model = new ModelStore(db).get('m')!;
+    const usable = usableRoutes(model, new ProviderStore(db), connectorById);
+    expect(usable.map(({ connector, provider }) => [provider.connector, connector.id])).toEqual([
+      ['openai-compatible', 'openai-compatible'],
+    ]);
   } finally {
     db.close();
   }

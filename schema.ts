@@ -166,7 +166,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 4) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 5) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -253,6 +253,18 @@ export function migrate(db: Database): void {
         ALTER TABLE routes DROP COLUMN cache_write_price;
         ALTER TABLE provider_models DROP COLUMN cache_write_price;
         PRAGMA user_version = 4;
+      `);
+    })();
+  }
+
+  // Version 5 names the two protocol connectors after the protocol they speak. A null base_url
+  // keeps meaning "the connector's default", which is the same address these ids had before.
+  if (version < 5) {
+    db.transaction(() => {
+      db.exec(`
+        UPDATE providers SET connector = 'openai-compatible' WHERE connector = 'openai';
+        UPDATE providers SET connector = 'anthropic-compatible' WHERE connector = 'anthropic';
+        PRAGMA user_version = 5;
       `);
     })();
   }
