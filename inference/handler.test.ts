@@ -1,7 +1,7 @@
 // Tests for routing, admission and accounting of client inference requests.
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { Admission } from '../admission';
+import { Admission, QueueFull } from '../admission';
 import type { Connector } from '../connectors/connector';
 import { KeyStore, type KeyInput } from '../keyStore';
 import { ModelStore } from '../modelStore';
@@ -13,7 +13,7 @@ import { Router } from '../router';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
 import type { AttemptInput, AttemptResult } from './attempt';
-import { handleInference, type InferenceDeps } from './handler';
+import { handleInference, MAX_WAITING_PER_KEY, type InferenceDeps } from './handler';
 
 const price = { input: 1, output: 2, cacheRead: null, cacheWrite: null };
 const tokens: Usage = {
@@ -53,6 +53,7 @@ function fixture(options: { routes?: number; key?: Partial<KeyInput>; priced?: b
   const deps: InferenceDeps = {
     keys, models, providers, usage, router, admission, now, fetch,
     connector: (id) => id === 'fake' ? connector : null,
+    queueDeadline: () => ({ signal: new AbortController().signal, cancel: () => {} }),
     attempt: async (input) => {
       calls.push(input);
       const result = scripts.get(input.upstreamModel)?.shift();
@@ -82,6 +83,51 @@ function stream() {
   return { result, finished, finish };
 }
 
+/** A queue clock the test fires by hand; counts how often each wait's clock is stopped. */
+function deadlines() {
+  const arms: Array<{ controller: AbortController; cancels: number }> = [];
+  const factory = () => {
+    const arm = { controller: new AbortController(), cancels: 0 };
+    arms.push(arm);
+    return { signal: arm.controller.signal, cancel: () => { arm.cancels += 1; } };
+  };
+  const last = () => {
+    const arm = arms[arms.length - 1];
+    if (!arm) throw new Error('No queue wait started');
+    return arm;
+  };
+  return { factory, arms, last };
+}
+
+/**
+ * Resolves once the handler has handed this request to admission: the queue holds it by then,
+ * because `enter` registers a waiter before it returns.
+ */
+function whenEntered(f: ReturnType<typeof fixture>): Promise<void> {
+  let entered!: () => void;
+  const seen = new Promise<void>((resolve) => { entered = resolve; });
+  const enter = f.admission.enter.bind(f.admission);
+  f.admission.enter = (id, limit, signal, maxWaiting) => {
+    const pending = enter(id, limit, signal, maxWaiting);
+    entered();
+    return pending;
+  };
+  return seen;
+}
+
+/** Resolves the first time a request finds `count` of this id's requests waiting. */
+function whenWaiting(f: ReturnType<typeof fixture>, count: number): Promise<void> {
+  let reached!: () => void;
+  const seen = new Promise<void>((resolve) => { reached = resolve; });
+  const enter = f.admission.enter.bind(f.admission);
+  f.admission.enter = (id, limit, signal, maxWaiting) => {
+    const pending = enter(id, limit, signal, maxWaiting);
+    if (f.admission.waiting(id) >= count) reached();
+    return pending;
+  };
+  return seen;
+}
+
 async function answer(f: ReturnType<typeof fixture>, req = f.request(), protocol: Protocol = 'chat') {
   const response = await handleInference(req, protocol, f.deps);
   return { response, text: await response.text() };
@@ -95,8 +141,8 @@ function released(f: ReturnType<typeof fixture>): Promise<void> {
   let resolve!: () => void;
   const done = new Promise<void>((finish) => { resolve = finish; });
   const enter = f.admission.enter.bind(f.admission);
-  f.admission.enter = async (id, limit, signal) => {
-    const release = await enter(id, limit, signal);
+  f.admission.enter = async (id, limit, signal, maxWaiting) => {
+    const release = await enter(id, limit, signal, maxWaiting);
     return () => {
       release();
       resolve();
@@ -316,18 +362,13 @@ for (const kind of ['forbidden', 'unpriced', 'over-limit'] as const) {
 
 test('rule 6: queued abandonment makes no attempt and preserves the existing place', async () => {
   const f = fixture({ key: { maxConcurrency: 1 } });
-  const release = await f.admission.enter(f.key.id, 1, new AbortController().signal);
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
   const controller = new AbortController();
-  let entered!: () => void;
-  const queued = new Promise<void>((resolve) => { entered = resolve; });
-  const enter = f.admission.enter.bind(f.admission);
-  f.admission.enter = (id, limit, signal) => {
-    const pending = enter(id, limit, signal);
-    entered();
-    return pending;
-  };
+  const entered = whenEntered(f);
   const pending = handleInference(f.request(undefined, {}, controller.signal), 'chat', f.deps);
-  await queued;
+  await entered;
   expect(f.admission.waiting(f.key.id)).toBe(1);
   controller.abort();
   const response = await pending;
@@ -616,5 +657,304 @@ test('rule 11: composed errors and recorded entries contain no secrets', async (
     expect(text).not.toContain(f.key.token);
     expect(text).not.toContain('provider-secret');
   }
+  f.db.close();
+});
+
+for (const protocol of ['chat', 'messages'] as const) {
+  test(`rule 6: a wait past its deadline is 429 in the ${protocol} error shape`, async () => {
+    const f = fixture({ key: { maxConcurrency: 1 } });
+    const clock = deadlines();
+    f.deps.queueDeadline = clock.factory;
+    const done = released(f);
+    const s = stream();
+    f.script(f.routes[0], s.result);
+    const running = await handleInference(f.request(), protocol, f.deps);
+    expect(running.status).toBe(200);
+    const attempts = f.calls.length;
+    const entered = whenEntered(f);
+    const queued = handleInference(f.request(undefined, {}, new AbortController().signal), protocol, f.deps);
+    await entered;
+    expect(f.admission.waiting(f.key.id)).toBe(1);
+    clock.last().controller.abort();
+    const response = await queued;
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('5');
+    expect(await response.text()).toBe(errorBody(protocol, 429, 'Queue wait timed out'));
+    expect(f.calls).toHaveLength(attempts);
+    expect(f.usage.logs()).toEqual([]);
+    expect(f.admission.waiting(f.key.id)).toBe(0);
+    expect(f.admission.running(f.key.id)).toBe(1);
+    s.finish({ usage: tokens, error: null, cancelled: false });
+    await done;
+    expect(f.admission.running(f.key.id)).toBe(0);
+    expect(f.usage.logs()).toHaveLength(1);
+    expect(f.usage.logs()[0].status).toBe(200);
+    f.db.close();
+  });
+}
+
+test('rule 6: a request arriving at a full queue is 429 with retry-after and no attempt', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const waiting = whenWaiting(f, MAX_WAITING_PER_KEY);
+  const controllers = Array.from({ length: MAX_WAITING_PER_KEY }, () => new AbortController());
+  const queue = Promise.all(controllers.map((controller) =>
+    handleInference(f.request(undefined, {}, controller.signal), 'chat', f.deps)));
+  await waiting;
+  expect(f.admission.waiting(f.key.id)).toBe(MAX_WAITING_PER_KEY);
+  const response = await handleInference(f.request(), 'chat', f.deps);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('5');
+  expect(await response.text()).toBe(errorBody('chat', 429, 'Queue is full for this key'));
+  expect(f.calls).toHaveLength(0);
+  expect(f.usage.logs()).toEqual([]);
+  expect(f.admission.waiting(f.key.id)).toBe(MAX_WAITING_PER_KEY);
+  expect(f.admission.running(f.key.id)).toBe(1);
+  expect(clock.last().cancels).toBe(1);
+  for (const controller of controllers) controller.abort();
+  const answered = await queue;
+  expect(answered.map((item) => item.status)).toEqual(controllers.map(() => 499));
+  release();
+  expect(f.admission.running(f.key.id)).toBe(0);
+  f.db.close();
+});
+
+test('rule 6: a client that leaves while waiting is 499, not 429', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const controller = new AbortController();
+  const entered = whenEntered(f);
+  const queued = handleInference(f.request(undefined, {}, controller.signal), 'chat', f.deps);
+  await entered;
+  controller.abort();
+  const response = await queued;
+  expect(response.status).toBe(499);
+  expect(await response.text()).toBe(errorBody('chat', 499, 'Client disconnected'));
+  expect(f.calls).toHaveLength(0);
+  expect(f.usage.logs()).toEqual([]);
+  expect(f.admission.waiting(f.key.id)).toBe(0);
+  expect(clock.last().cancels).toBe(1);
+  release();
+  f.db.close();
+});
+
+test('rule 6: a place granted before the deadline is used; a later deadline is ignored', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  f.script(f.routes[0], complete);
+  const entered = whenEntered(f);
+  const queued = handleInference(f.request(undefined, {}, new AbortController().signal), 'chat', f.deps);
+  await entered;
+  release();
+  // The grant has happened; the deadline fires in the same turn, before the handler resumes.
+  clock.last().controller.abort();
+  const response = await queued;
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe('{"answer":"ok"}');
+  expect(f.calls).toHaveLength(1);
+  expect(f.admission.running(f.key.id)).toBe(0);
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the place is granted at once', async () => {
+  const f = fixture();
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  f.script(f.routes[0], complete);
+  const { response } = await answer(f);
+  expect(response.status).toBe(200);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the place is granted after a wait', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  f.script(f.routes[0], complete);
+  const entered = whenEntered(f);
+  const queued = handleInference(f.request(), 'chat', f.deps);
+  await entered;
+  release();
+  expect((await queued).status).toBe(200);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the deadline ends the wait', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const entered = whenEntered(f);
+  const queued = handleInference(f.request(), 'chat', f.deps);
+  await entered;
+  clock.last().controller.abort();
+  expect((await queued).status).toBe(429);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  release();
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the queue is full', async () => {
+  const f = fixture();
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  f.admission.enter = async () => { throw new QueueFull(); };
+  const response = await handleInference(f.request(), 'chat', f.deps);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('5');
+  expect(await response.text()).toBe(errorBody('chat', 429, 'Queue is full for this key'));
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the client leaves', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const controller = new AbortController();
+  const entered = whenEntered(f);
+  const queued = handleInference(f.request(undefined, {}, controller.signal), 'chat', f.deps);
+  await entered;
+  controller.abort();
+  expect((await queued).status).toBe(499);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  release();
+  f.db.close();
+});
+
+test('rule 6: cancel runs exactly once when the attempt throws', async () => {
+  const f = fixture();
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const bug = new Error('bug');
+  f.script(f.routes[0], bug);
+  await expect(handleInference(f.request(), 'chat', f.deps)).rejects.toBe(bug);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  expect(f.admission.running(f.key.id)).toBe(0);
+  f.db.close();
+});
+
+test('rule 6: after the wait the request signal keeps no listener from it', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const held = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  f.script(f.routes[0], complete);
+  const controller = new AbortController();
+  const req = f.request(undefined, {}, controller.signal);
+  let added = 0;
+  let removed = 0;
+  const add = req.signal.addEventListener.bind(req.signal);
+  const remove = req.signal.removeEventListener.bind(req.signal);
+  req.signal.addEventListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    added += 1;
+    if (listener) add(type, listener, options);
+  };
+  req.signal.removeEventListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    removed += 1;
+    if (listener) remove(type, listener, options);
+  };
+  const entered = whenEntered(f);
+  const queued = handleInference(req, 'chat', f.deps);
+  await entered;
+  held();
+  expect((await queued).status).toBe(200);
+  expect(added).toBe(1);
+  expect(removed).toBe(added);
+  f.db.close();
+});
+
+test('rule 6: a client that left before the wait began is 499 at once and never waits', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  f.deps.queueDeadline = clock.factory;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const controller = new AbortController();
+  controller.abort();
+  const entered = whenEntered(f);
+  const pending = handleInference(f.request(undefined, {}, controller.signal), 'chat', f.deps);
+  await entered;
+  expect(f.admission.waiting(f.key.id)).toBe(0);
+  const response = await pending;
+  expect(response.status).toBe(499);
+  expect(await response.text()).toBe(errorBody('chat', 499, 'Client disconnected'));
+  expect(f.admission.running(f.key.id)).toBe(1);
+  expect(f.admission.waiting(f.key.id)).toBe(0);
+  expect(f.calls).toHaveLength(0);
+  expect(f.usage.logs()).toEqual([]);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  release();
+  expect(f.admission.running(f.key.id)).toBe(0);
+  f.db.close();
+});
+
+test('rule 6: a deadline that has already fired is 429 at once and never waits', async () => {
+  const f = fixture({ key: { maxConcurrency: 1 } });
+  const clock = deadlines();
+  const fired = () => {
+    const arm = clock.factory();
+    clock.last().controller.abort();
+    return arm;
+  };
+  f.deps.queueDeadline = fired;
+  const release = await f.admission.enter(
+    f.key.id, 1, new AbortController().signal, MAX_WAITING_PER_KEY,
+  );
+  const entered = whenEntered(f);
+  const pending = handleInference(f.request(), 'chat', f.deps);
+  await entered;
+  expect(f.admission.waiting(f.key.id)).toBe(0);
+  const response = await pending;
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('5');
+  expect(await response.text()).toBe(errorBody('chat', 429, 'Queue wait timed out'));
+  expect(f.admission.running(f.key.id)).toBe(1);
+  expect(f.admission.waiting(f.key.id)).toBe(0);
+  expect(f.calls).toHaveLength(0);
+  expect(f.usage.logs()).toEqual([]);
+  expect(clock.arms).toHaveLength(1);
+  expect(clock.last().cancels).toBe(1);
+  release();
   f.db.close();
 });

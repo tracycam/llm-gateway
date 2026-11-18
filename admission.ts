@@ -3,6 +3,9 @@
 /** A client left while waiting. */
 export class Abandoned extends Error {}
 
+/** The queue of this id already holds as many waiting requests as its caller allows. */
+export class QueueFull extends Error {}
+
 interface Waiter {
   limit: number | null;
   signal: AbortSignal;
@@ -21,18 +24,27 @@ export class Admission {
   /**
    * Take a place or wait in arrival order. On release, each head waiter's own limit
    * decides whether it fits. An unlimited request never waits, even behind a queue.
+   * A request that would have to wait while `maxWaiting` of this id's requests already
+   * wait is refused at once; a request that takes a place at once is never refused.
    */
-  public enter(id: string, limit: number | null, signal: AbortSignal): Promise<() => void> {
+  public enter(
+    id: string, limit: number | null, signal: AbortSignal, maxWaiting: number,
+  ): Promise<() => void> {
     if (signal.aborted) return Promise.reject(new Abandoned());
     let state = this.states.get(id);
     if (!state) {
       state = { running: 0, waiters: [] };
       this.states.set(id, state);
     }
-    if (limit === null || (state.waiters.length === 0 && state.running < limit)) {
-      return Promise.resolve(this.grant(id, state));
-    }
     const current = state;
+    if (limit === null || (current.waiters.length === 0 && current.running < limit)) {
+      return Promise.resolve(this.grant(id, current));
+    }
+    if (current.waiters.length >= maxWaiting) {
+      // The bound is checked before the waiter exists: nothing is pushed, no listener is added.
+      this.forget(id, current);
+      return Promise.reject(new QueueFull());
+    }
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
         limit, signal, resolve,
@@ -80,6 +92,11 @@ export class Admission {
       waiter.signal.removeEventListener('abort', waiter.abort);
       waiter.resolve(this.grant(id, state));
     }
+    this.forget(id, state);
+  }
+
+  /** Drop an id's state once it holds nothing. */
+  private forget(id: string, state: State): void {
     if (state.running === 0 && state.waiters.length === 0) this.states.delete(id);
   }
 }

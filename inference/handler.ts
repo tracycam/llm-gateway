@@ -1,5 +1,5 @@
 // Authenticate, route and account for one client inference request.
-import { Abandoned, type Admission } from '../admission';
+import { Abandoned, QueueFull, type Admission } from '../admission';
 import { providerAccess } from '../connectors/access';
 import type { Connector } from '../connectors/connector';
 import type { KeyRecord, KeyStore } from '../keyStore';
@@ -13,6 +13,21 @@ import type { UsageStore } from '../usageStore';
 import type { attempt, AttemptResult } from './attempt';
 import { authenticate } from './auth';
 import { usableRoutes, type UsableRoute } from './routes';
+
+/**
+ * Policy, not measured: the most requests of one key that may wait for a place at once. A
+ * request that would become the next waiter of its key is refused at once.
+ */
+export const MAX_WAITING_PER_KEY = 64;
+
+/** Policy, not measured: how long one request waits for a place before it is refused. */
+export const MAX_QUEUE_WAIT_MS = 120_000;
+
+/** Policy, not measured: the seconds a queue refusal asks the client to wait. */
+export const QUEUE_RETRY_AFTER_S = 5;
+
+const QUEUE_FULL_MESSAGE = 'Queue is full for this key';
+const QUEUE_TIMEOUT_MESSAGE = 'Queue wait timed out';
 
 /** Dependencies for a single inference request. */
 export interface InferenceDeps {
@@ -28,6 +43,11 @@ export interface InferenceDeps {
   attempt: typeof attempt;
   fetch: typeof fetch;
   now(): Date;
+  /**
+   * Starts the clock on one queue wait: `signal` fires when the wait has lasted too long;
+   * `cancel` stops the clock.
+   */
+  queueDeadline(): { signal: AbortSignal; cancel(): void };
 }
 
 /** Validated request and its per-request dependencies. */
@@ -66,6 +86,67 @@ interface Served {
 
 function errorResponse(inbound: Protocol, status: number, message: string, param?: string): Response {
   return Response.json(protocolModule(inbound).errorBody(status, message, param), { status });
+}
+
+/** A place in the key's concurrency, or the refusal that ends the request before one is granted. */
+type Place = { release: () => void } | { response: Response };
+
+/** One signal that fires when either source does, and that can be detached from both. */
+interface Combined {
+  /** Fires when the client leaves or the clock runs out. */
+  signal: AbortSignal;
+  /** Removes this signal's listeners from both sources. */
+  dispose(): void;
+}
+
+function combinedSignal(first: AbortSignal, second: AbortSignal): Combined {
+  const controller = new AbortController();
+  const sources = [first, second];
+  const fire = () => controller.abort();
+  for (const source of sources) source.addEventListener('abort', fire);
+  if (sources.some((source) => source.aborted)) controller.abort();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const source of sources) source.removeEventListener('abort', fire);
+    },
+  };
+}
+
+/** The 429 that ends a queue wait, telling the client when to try again. */
+function queueRefusal(ctx: Context, message: string): Response {
+  const response = errorResponse(ctx.inbound, 429, message);
+  response.headers.set('retry-after', String(QUEUE_RETRY_AFTER_S));
+  return response;
+}
+
+/**
+ * Take a place for this request, waiting in the key's queue when its concurrency is used up.
+ * The wait ends by a grant, by the client leaving, by a full queue or by its deadline.
+ */
+async function waitForPlace(ctx: Context): Promise<Place> {
+  const deadline = ctx.deps.queueDeadline();
+  const wait = combinedSignal(ctx.req.signal, deadline.signal);
+  try {
+    const release = await ctx.deps.admission.enter(
+      ctx.key.id, ctx.key.maxConcurrency, wait.signal, MAX_WAITING_PER_KEY,
+    );
+    return { release };
+  } catch (error) {
+    if (error instanceof QueueFull) return { response: queueRefusal(ctx, QUEUE_FULL_MESSAGE) };
+    // Admission rejects with Abandoned when the client left or the deadline fired.
+    if (!(error instanceof Abandoned)) throw error;
+    if (ctx.req.signal.aborted) {
+      return { response: errorResponse(ctx.inbound, 499, 'Client disconnected') };
+    }
+    if (deadline.signal.aborted) return { response: queueRefusal(ctx, QUEUE_TIMEOUT_MESSAGE) };
+    // The wait signal fires only from the client's request or this deadline.
+    throw error;
+  } finally {
+    // Every path above ends the wait, so the clock stops here exactly once.
+    deadline.cancel();
+    wait.dispose();
+  }
 }
 
 function refusalResponse(ctx: Context): Response | null {
@@ -254,14 +335,9 @@ export async function handleInference(
   const ctx: Context = { req, inbound, deps, start, key, model, body, routes };
   const refusal = refusalResponse(ctx);
   if (refusal) return refusal;
-  let release: () => void;
-  try {
-    release = await deps.admission.enter(key.id, key.maxConcurrency, req.signal);
-  } catch (error) {
-    // Admission rejects with Abandoned when the queued client disconnects.
-    if (error instanceof Abandoned) return errorResponse(inbound, 499, 'Client disconnected');
-    throw error;
-  }
+  const place = await waitForPlace(ctx);
+  if ('response' in place) return place.response;
+  const release = place.release;
   try {
     const result = await tryRoutes(ctx);
     void result.over.finally(release);

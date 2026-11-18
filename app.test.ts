@@ -4,10 +4,11 @@ import { afterEach, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp, GATEWAY_IDLE_TIMEOUT, type GatewayApp } from './app';
+import { createApp, GATEWAY_IDLE_TIMEOUT, queueDeadline, type GatewayApp } from './app';
 import { issueCookie } from './adminAuth';
 import type { Connector } from './connectors/connector';
 import { openGatewayDatabase } from './database';
+import { MAX_QUEUE_WAIT_MS } from './inference/handler';
 import { KeyStore } from './keyStore';
 import { ModelStore } from './modelStore';
 import { ProviderStore } from './providerStore';
@@ -362,6 +363,67 @@ test('anything else is the console asset for GET and HEAD only, and a missing co
 
 test('the server disables Bun idle timeout so a slow model is not cut at 255 s', () => {
   expect(GATEWAY_IDLE_TIMEOUT).toBe(0);
+});
+
+/** One timer armed while a test watches `setTimeout`. */
+interface ArmedTimer {
+  ms: number;
+  run: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Runs `body` with `setTimeout` and `clearTimeout` recording their calls, then restores both.
+ * Only the queue deadline arms a timer on these paths, so one call arrives per queue wait.
+ */
+async function withTimers<T>(
+  body: (timers: ArmedTimer[], cleared: unknown[]) => Promise<T>,
+): Promise<T> {
+  const timers: ArmedTimer[] = [];
+  const cleared: unknown[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = ((run: () => void, ms?: number) => {
+    const timer = realSetTimeout(run, ms);
+    timers.push({ ms: ms ?? 0, run, timer });
+    return timer;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((timer?: ReturnType<typeof setTimeout>) => {
+    cleared.push(timer);
+    realClearTimeout(timer);
+  }) as unknown as typeof clearTimeout;
+  try {
+    return await body(timers, cleared);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+}
+
+test('a request arms the production queue deadline and clears its timer', async () => {
+  const f = setup();
+  const outcome = await withTimers(async (timers, cleared) => {
+    const response = await withKey(f, '/v1/chat/completions', post({ model: 'stub-model' }));
+    expect(response.status).toBe(200);
+    return { timers, cleared };
+  });
+  expect(MAX_QUEUE_WAIT_MS).toBe(120_000);
+  const armed = outcome.timers.filter(({ ms }) => ms === MAX_QUEUE_WAIT_MS);
+  expect(armed).toHaveLength(1);
+  expect(outcome.cleared).toContain(armed[0].timer);
+});
+
+test('the production queue deadline aborts its signal when the timer fires', async () => {
+  const outcome = await withTimers(async (timers, cleared) => {
+    const deadline = queueDeadline();
+    expect(timers).toHaveLength(1);
+    expect(deadline.signal.aborted).toBe(false);
+    timers[0].run();
+    expect(deadline.signal.aborted).toBe(true);
+    deadline.cancel();
+    return { timer: timers[0].timer, cleared };
+  });
+  expect(outcome.cleared).toEqual([outcome.timer]);
 });
 
 test('closing the app closes the one database', async () => {

@@ -13,7 +13,7 @@ import type { NodeLinkOptions } from './nodeLink';
 import type { Connector } from './connectors/connector';
 import { errorResponse, jsonResponse } from './http';
 import { attempt } from './inference/attempt';
-import { handleInference, type InferenceDeps } from './inference/handler';
+import { handleInference, MAX_QUEUE_WAIT_MS, type InferenceDeps } from './inference/handler';
 import { handleModel, handleModelList, type ModelListDeps } from './inference/modelList';
 import { KeyStore } from './keyStore';
 import { ModelStore } from './modelStore';
@@ -125,6 +125,16 @@ async function inferenceRoute(
   return withCors(notFoundV1(req));
 }
 
+/** The production queue deadline: one timer of `MAX_QUEUE_WAIT_MS`, stopped by `cancel`. */
+export function queueDeadline(): { signal: AbortSignal; cancel(): void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MAX_QUEUE_WAIT_MS);
+  return {
+    signal: controller.signal,
+    cancel: () => { clearTimeout(timer); },
+  };
+}
+
 /** Build the gateway's request handler over one database, migrated once here. */
 export function createApp(options: GatewayAppOptions): GatewayApp {
   migrate(options.db);
@@ -150,6 +160,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     attempt,
     fetch: options.fetch,
     now: options.now,
+    queueDeadline,
   };
 
   async function managementRoute(req: Request, pathname: string): Promise<Response> {
