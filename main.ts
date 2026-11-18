@@ -7,7 +7,10 @@ import {
   serveAppWebAsset,
 } from '../server/apps/common';
 import { handleAnthropicMessages } from './anthropicAdapter';
+import { Cluster } from './cluster';
 import { migrateGatewayDataDir } from './dataDir';
+import { openNodeEvents } from './nodeEvents';
+import { NodeStore } from './nodeStore';
 import { GatewayKeyRecord, GatewayStore } from './store';
 
 const PORT = Number.parseInt(process.env.AIHUB_GATEWAY_PORT ?? '8000', 10);
@@ -24,6 +27,19 @@ const WEB_DIST_DIR = process.env.AIHUB_WEB_DIST_DIR ?? DEFAULT_WEB_DIST_DIR;
 
 migrateGatewayDataDir(DATA_DIR, path.join(VOL1_DIR, 'apps', 'app-gateway'));
 const store = new GatewayStore(DATA_DIR);
+const nodeStore = new NodeStore(DATA_DIR);
+const timing = (name: string): number | undefined => {
+  const value = process.env[name];
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`Invalid ${name}`);
+  return parsed;
+};
+const cluster = new Cluster(nodeStore.list(), {
+  watchdogMs: timing('AIHUB_GATEWAY_NODE_WATCHDOG_MS'),
+  retryMinMs: timing('AIHUB_GATEWAY_NODE_RETRY_MIN_MS'),
+  retryMaxMs: timing('AIHUB_GATEWAY_NODE_RETRY_MAX_MS'),
+});
 
 function extractToken(req: Request): string {
   const auth = req.headers.get('authorization') ?? '';
@@ -241,6 +257,7 @@ const server = Bun.serve({
     const session = await sessionRoute(req, '/api/gateway');
     if (session) return session;
     if (pathname.startsWith('/api/') && !isAuthorized(req)) return errorResponse('未登录', 401);
+    if (pathname === '/api/gateway/events' && req.method === 'GET') return openNodeEvents(req, cluster);
     if (pathname.startsWith('/v1/') && req.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
@@ -394,8 +411,11 @@ const server = Bun.serve({
 
 console.log(`[LLM API Gateway] Listening on http://${LISTEN}:${server.port} (control=${CONTROL_URL})`);
 
-const shutdown = () => {
+const shutdown = async () => {
   server.stop(true);
+  await cluster.close();
+  nodeStore.close();
+  store.close();
   process.exit(0);
 };
 process.on('SIGINT', shutdown);

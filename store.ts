@@ -1,7 +1,6 @@
 import { Database } from 'bun:sqlite';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
+import { openGatewayDatabase } from './database';
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -80,9 +79,7 @@ export class GatewayStore {
   private db: Database;
 
   constructor(dataDir: string) {
-    fs.mkdirSync(dataDir, { recursive: true });
-    this.db = new Database(path.join(dataDir, 'gateway.sqlite'));
-    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db = openGatewayDatabase(dataDir);
     this.initSchema();
   }
 
