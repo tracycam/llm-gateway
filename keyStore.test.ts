@@ -3,8 +3,8 @@ import { Database } from 'bun:sqlite';
 import { migrate } from './schema';
 import { KeyStore } from './keyStore';
 import { ModelStore } from './modelStore';
-import { GatewayStore } from './store';
 import { openGatewayDatabase } from './database';
+import { LEGACY_KEY_ID, writeLegacyDatabase } from './testing/legacy';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,13 +65,11 @@ test('refusal order forbids models before unpriced before over limit', () => {
 test('old gateway API key verifies after migration', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-key-'));
   try {
-    const old = new GatewayStore(dir);
-    const key = old.createKey('old');
-    old.close();
+    const token = writeLegacyDatabase(dir);
     const db = openGatewayDatabase(dir);
     try {
       migrate(db);
-      expect(new KeyStore(db).verify(key.token, now)).toMatchObject({ key: { id: key.id, name: key.name } });
+      expect(new KeyStore(db).verify(token, now)).toMatchObject({ key: { id: LEGACY_KEY_ID, name: 'old key' } });
     } finally {
       db.close();
     }

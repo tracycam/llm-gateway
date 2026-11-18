@@ -1,14 +1,18 @@
 // What only shows when a route is caught in the middle: the daemon here answers the identity
 // request when the test lets it. Everything else about the routes is in nodes.integration.test.ts.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
+import type { Database } from 'bun:sqlite';
 import fs from 'node:fs';
 import { tempDir } from '../server/testing/fixtures';
 import { Cluster, NodeRecord } from './cluster';
+import { openGatewayDatabase } from './database';
 import { handleNodeRoute } from './nodeRoutes';
 import { NodeStore } from './nodeStore';
+import { migrate } from './schema';
 import { FakeDaemon } from './testing/fakeDaemon';
 
 let dir: string;
+let db: Database;
 let daemon: FakeDaemon;
 let store: NodeStore;
 let cluster: Cluster;
@@ -19,7 +23,9 @@ beforeEach(async () => {
   daemon = new FakeDaemon();
   daemon.token = 'node-token-0123456789';
   daemon.start();
-  store = new NodeStore(dir);
+  db = openGatewayDatabase(dir);
+  migrate(db);
+  store = new NodeStore(db);
   node = {
     id: 'node-1',
     name: 'machine',
@@ -36,7 +42,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await cluster.close();
-  store.close();
+  db.close();
   await daemon.stop();
   fs.rmSync(dir, { recursive: true, force: true });
 });

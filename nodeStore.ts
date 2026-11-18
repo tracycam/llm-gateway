@@ -1,6 +1,5 @@
 import { Database } from 'bun:sqlite';
 import { NodeRecord } from './cluster';
-import { openGatewayDatabase } from './database';
 
 interface NodeRow {
   id: string;
@@ -11,24 +10,15 @@ interface NodeRow {
   created_at: string;
 }
 
-/** The registered nodes, in the gateway's database. The only place a node token is stored. */
+/**
+ * The registered nodes, in the gateway's one database. The only place a node token is stored.
+ * The table is created by `schema.migrate`; this store never opens or closes a connection.
+ */
 export class NodeStore {
-  private readonly db: Database;
-
-  constructor(dataDir: string) {
-    this.db = openGatewayDatabase(dataDir);
-    this.db.exec(`CREATE TABLE IF NOT EXISTS nodes (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      url TEXT NOT NULL,
-      token TEXT,
-      node_id TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    )`);
-  }
+  constructor(private readonly db: Database) {}
 
   public list(): NodeRecord[] {
-    const rows = this.db.query('SELECT * FROM nodes ORDER BY created_at, id').all() as NodeRow[];
+    const rows = this.db.query<NodeRow, []>('SELECT * FROM nodes ORDER BY created_at, id').all();
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -53,9 +43,5 @@ export class NodeStore {
 
   public delete(id: string): boolean {
     return this.db.query('DELETE FROM nodes WHERE id = ?').run(id).changes > 0;
-  }
-
-  public close(): void {
-    this.db.close();
   }
 }

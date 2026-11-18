@@ -91,7 +91,7 @@ test('logout clears the gateway cookie', async () => {
 });
 
 test('a path that is not a session route is not handled', async () => {
-  expect(await call('GET', '/api/gateway/state')).toBeNull();
+  expect(await call('GET', '/api/gateway/providers')).toBeNull();
 });
 
 test('a listener that is not loopback requires an admin token', () => {

@@ -5,32 +5,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openGatewayDatabase } from './database';
 import { Database } from 'bun:sqlite';
-import { GatewayStore } from './store';
-import { NodeStore } from './nodeStore';
 import { migrate } from './schema';
-
-interface TokenHashRow { token_hash: string }
+import { LEGACY_KEY_ID, LEGACY_MODELLED, LEGACY_NODE, writeLegacyDatabase } from './testing/legacy';
 
 test('version 2 migration preserves key, node and request log', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-migration-'));
   try {
-    const old = new GatewayStore(dir);
-    const key = old.createKey('old key');
-    old.recordRequest({ protocol: 'openai', model: 'old model', key, promptTokens: 7, completionTokens: 3, ttftMs: 2, latencyMs: 10, status: 200 });
-    const nodes = new NodeStore(dir);
-    const node = { id: 'node-1', name: 'node', url: 'http://localhost', token: 'secret', nodeId: 'machine', createdAt: '2024-01-01T00:00:00.000Z' };
-    nodes.insert(node);
-    nodes.close();
-    old.close();
+    const token = writeLegacyDatabase(dir);
     const db = openGatewayDatabase(dir);
     try {
-      const before = db.query<TokenHashRow, []>('SELECT token_hash FROM api_keys').get()!;
       migrate(db);
       expect(db.query('SELECT id, name, token_hash, request_count, prompt_tokens, completion_tokens FROM api_keys').get()).toEqual(
-        expect.objectContaining({ id: key.id, name: key.name, token_hash: before.token_hash, request_count: 1, prompt_tokens: 7, completion_tokens: 3 })
+        expect.objectContaining({
+          id: LEGACY_KEY_ID, name: 'old key',
+          token_hash: createHash('sha256').update(token).digest('hex'),
+          request_count: 1, prompt_tokens: 7, completion_tokens: 3,
+        })
       );
-      expect(db.query('SELECT * FROM nodes').get()).toEqual({ id: node.id, name: node.name, url: node.url, token: node.token, node_id: node.nodeId, created_at: node.createdAt });
-      expect(db.query('SELECT model_name, input_tokens, output_tokens FROM request_logs').get()).toEqual({ model_name: 'old model', input_tokens: 7, output_tokens: 3 });
+      expect(db.query('SELECT * FROM nodes').get()).toEqual({
+        id: LEGACY_NODE.id, name: LEGACY_NODE.name, url: LEGACY_NODE.url, token: LEGACY_NODE.token,
+        node_id: LEGACY_NODE.nodeId, created_at: LEGACY_NODE.createdAt,
+      });
+      expect(db.query('SELECT model_name, input_tokens, output_tokens FROM request_logs').get()).toEqual({
+        model_name: LEGACY_MODELLED, input_tokens: 7, output_tokens: 3,
+      });
     } finally {
       db.close();
     }
