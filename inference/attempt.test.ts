@@ -332,3 +332,17 @@ test('redirect response body is cancelled', async () => {
     reason: 'Upstream returned a redirect' });
   expect(cancelled).toBe(true);
 });
+
+test('stream finished error redacts upstream key without changing stream bytes', async () => {
+  const content = 'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n';
+  const error = 'data: {"error":{"message":"echo secret-key"}}\n\n';
+  const s = stub(() => new Response(content + error));
+  try {
+    const req = input(s.server.url.href);
+    req.body = { messages: [{ role: 'user', content: 'hello' }], stream: true };
+    const result = await attempt(req);
+    if (result.kind !== 'stream') throw new Error(JSON.stringify(result));
+    expect(await new Response(result.body).text()).toBe(content + error);
+    expect(await result.finished).toEqual({ usage: null, error: 'echo [redacted]', cancelled: false });
+  } finally { s.server.stop(true); }
+});

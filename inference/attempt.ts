@@ -133,7 +133,11 @@ async function openStream(
     if (input.signal.aborted) return { kind: 'abandoned' };
     return failed({ kind: 'unavailable' }, response.status, redact(opened.reason, target));
   }
-  return { kind: 'stream', body: opened.body, finished: opened.finished };
+  const finished = opened.finished.then((result) => ({
+    ...result,
+    error: result.error === null ? null : redact(result.error, target),
+  }));
+  return { kind: 'stream', body: opened.body, finished };
 }
 
 async function answer(
