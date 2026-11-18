@@ -30,7 +30,7 @@ async function createModel(req: Request, deps: AdminDeps): Promise<Response> {
   return jsonResponse({ model }, 201);
 }
 
-async function updateModel(req: Request, deps: AdminDeps, id: string): Promise<Response> {
+async function updateModel(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const name = optionalString(body.name, 'name');
   const modelPrice = body.price === undefined ? undefined : price(body.price);
@@ -41,7 +41,7 @@ async function updateModel(req: Request, deps: AdminDeps, id: string): Promise<R
   return jsonResponse({ model });
 }
 
-async function createRoute(req: Request, deps: AdminDeps, id: string): Promise<Response> {
+async function createRoute(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const providerId = string(body.providerId, 'providerId');
   const upstreamModel = string(body.upstreamModel, 'upstreamModel');
@@ -53,7 +53,7 @@ async function createRoute(req: Request, deps: AdminDeps, id: string): Promise<R
   return jsonResponse({ route }, 201);
 }
 
-async function updateRoute(req: Request, deps: AdminDeps, id: string): Promise<Response> {
+async function updateRoute(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const weight = integerAtLeast(body.weight, 'weight', 1);
   const enabled = boolean(body.enabled, 'enabled');
@@ -87,10 +87,10 @@ const routes: readonly AdminRoute[] = [
   ['GET', /^\/api\/gateway\/models$/, listModels],
   ['POST', /^\/api\/gateway\/models$/, createModel],
   ['GET', /^\/api\/gateway\/models\/([^/]+)$/, getModel],
-  ['PATCH', /^\/api\/gateway\/models\/([^/]+)$/, (req, deps, [id]) => updateModel(req, deps, id)],
+  ['PATCH', /^\/api\/gateway\/models\/([^/]+)$/, updateModel],
   ['DELETE', /^\/api\/gateway\/models\/([^/]+)$/, deleteModel],
-  ['POST', /^\/api\/gateway\/models\/([^/]+)\/routes$/, (req, deps, [id]) => createRoute(req, deps, id)],
-  ['PATCH', /^\/api\/gateway\/routes\/([^/]+)$/, (req, deps, [id]) => updateRoute(req, deps, id)],
+  ['POST', /^\/api\/gateway\/models\/([^/]+)\/routes$/, createRoute],
+  ['PATCH', /^\/api\/gateway\/routes\/([^/]+)$/, updateRoute],
   ['DELETE', /^\/api\/gateway\/routes\/([^/]+)$/, deleteRoute],
 ];
 

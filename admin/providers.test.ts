@@ -4,11 +4,13 @@ import { expect, test } from 'bun:test';
 import type { Connector } from '../connectors/connector';
 import { UpstreamFailure } from '../connectors/connector';
 import { ModelStore } from '../modelStore';
+import { KeyStore } from '../keyStore';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
+import { UsageStore } from '../usageStore';
 import type { AdminDeps } from './deps';
 import { handleProviderRoute } from './providers';
-import { fixture, request, upstreamFailure } from './fixture.test-helper';
+import { fixture, request, upstreamFailure } from './testing';
 
 test('credentials, refresh failure, publication and input validation', async () => {
   const db = new Database(':memory:');
@@ -33,6 +35,8 @@ test('credentials, refresh failure, publication and input validation', async () 
   const deps: AdminDeps = {
     providers: new ProviderStore(db),
     models: new ModelStore(db),
+    keys: new KeyStore(db),
+    usage: new UsageStore(db),
     connector: (id) => id === connector.id ? connector : null,
     connectors: () => [connector],
     now: () => new Date('2026-01-01T00:00:00Z'),
@@ -219,8 +223,8 @@ test('providerAccess reads discovered models lazily once', async () => {
   const provider = deps.providers.create({
     name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
   }, deps.now());
-  const { providerAccess } = await import('./providers');
-  const access = providerAccess(deps, provider);
+  const { providerAccess } = await import('../connectors/access');
+  const access = providerAccess(deps.providers, provider);
   await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
   expect(access.model('upstream')?.upstreamId).toBe('upstream');
   deps.providers.replaceModels(provider.id, [], deps.now());
@@ -270,5 +274,64 @@ test('rule 6 provider path rejects encoded slash', async () => {
   const { deps, db } = fixture();
   expect(await handleProviderRoute(request('/providers/a%2Fb', 'DELETE'), deps)).toBeNull();
   expect(deps.providers.list()).toHaveLength(0);
+  db.close();
+});
+
+test('PATCH apiKey stores JSON credential text', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const req = request(`/providers/${provider.id}`, 'PATCH', { apiKey: 'new' });
+  const response = await handleProviderRoute(req, deps);
+  expect(response?.status).toBe(200);
+  expect(deps.providers.credential(provider.id)).toBe('{"apiKey":"new"}');
+  db.close();
+});
+
+test('PATCH without apiKey preserves credential', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: '{"apiKey":"old"}', autoPublish: false,
+  }, deps.now());
+  const req = request(`/providers/${provider.id}`, 'PATCH', { name: 'new' });
+  const response = await handleProviderRoute(req, deps);
+  expect(response?.status).toBe(200);
+  expect(deps.providers.credential(provider.id)).toBe('{"apiKey":"old"}');
+  db.close();
+});
+
+test('published requires the same provider as well as upstream id', async () => {
+  const { deps, db } = fixture();
+  const one = deps.providers.create({
+    name: 'one', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const two = deps.providers.create({
+    name: 'two', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  await handleProviderRoute(request(`/providers/${one.id}/refresh`, 'POST'), deps);
+  await handleProviderRoute(request(`/providers/${two.id}/refresh`, 'POST'), deps);
+  deps.models.publish(one.id, 'upstream', deps.now());
+  const response = await handleProviderRoute(request(`/providers/${two.id}/models`), deps);
+  expect((await response?.json()).models[0].published).toBe(false);
+  expect(deps.models.list()[0].routes[0].providerId).toBe(one.id);
+  db.close();
+});
+
+test('publish distinguishes unknown provider and upstream model', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const body = { upstreamId: 'missing' };
+  const providerRequest = request('/providers/missing/publish', 'POST', body);
+  const modelRequest = request(`/providers/${provider.id}/publish`, 'POST', body);
+  const missingProvider = await handleProviderRoute(providerRequest, deps);
+  const missingModel = await handleProviderRoute(modelRequest, deps);
+  expect(missingProvider?.status).toBe(404);
+  expect(await missingProvider?.json()).toEqual({ error: '未找到提供商' });
+  expect(missingModel?.status).toBe(404);
+  expect(await missingModel?.json()).toEqual({ error: '未找到提供商模型' });
+  expect(deps.models.list()).toHaveLength(0);
   db.close();
 });

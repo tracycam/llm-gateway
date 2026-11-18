@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test';
 import { StoreRefusal } from '../schema';
 import { dispatch, type AdminRoute } from './dispatch';
-import { fixture, request } from './fixture.test-helper';
+import { fixture, request } from './testing';
 import { InputError } from './input';
 
 test('rule 5: matching path with wrong method returns 405, foreign path returns null', async () => {

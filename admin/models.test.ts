@@ -2,11 +2,13 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { ModelStore } from '../modelStore';
+import { KeyStore } from '../keyStore';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
+import { UsageStore } from '../usageStore';
 import type { AdminDeps } from './deps';
 import { handleModelRoute } from './models';
-import { fixture, request } from './fixture.test-helper';
+import { fixture, request } from './testing';
 
 test('models and routes validate inputs and persist changes', async () => {
   const db = new Database(':memory:');
@@ -14,6 +16,8 @@ test('models and routes validate inputs and persist changes', async () => {
   const deps: AdminDeps = {
     providers: new ProviderStore(db),
     models: new ModelStore(db),
+    keys: new KeyStore(db),
+    usage: new UsageStore(db),
     connector: () => null,
     connectors: () => [],
     now: () => new Date('2026-01-01T00:00:00Z'),

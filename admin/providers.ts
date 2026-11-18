@@ -1,25 +1,11 @@
 // Provider and connector management routes.
-import { UpstreamFailure, type ProviderAccess } from '../connectors/connector';
+import { providerAccess } from '../connectors/access';
+import { UpstreamFailure } from '../connectors/connector';
 import { errorResponse, jsonResponse } from '../http';
 import type { ProviderModel, ProviderModelInput, ProviderRecord } from '../providerStore';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';
 import { boolean, InputError, optionalString, readBody, string } from './input';
-
-/** Build the connector's access to a provider and its stored credentials. */
-export function providerAccess(deps: AdminDeps, provider: ProviderRecord): ProviderAccess {
-  let models: ProviderModel[] | undefined;
-  return {
-    id: provider.id,
-    baseUrl: provider.baseUrl,
-    credential: deps.providers.credential(provider.id),
-    saveCredential: (credential) => { deps.providers.setCredential(provider.id, credential); },
-    model: (id) => {
-      models ??= deps.providers.models(provider.id);
-      return models.find((model) => model.upstreamId === id) ?? null;
-    },
-  };
-}
 
 function baseUrl(value: unknown): string {
   const text = string(value, 'baseUrl');
@@ -67,7 +53,7 @@ async function create(req: Request, deps: AdminDeps): Promise<Response> {
   return jsonResponse({ provider }, 201);
 }
 
-async function update(req: Request, deps: AdminDeps, id: string): Promise<Response> {
+async function update(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const name = optionalString(body.name, 'name');
   const url = body.baseUrl === undefined || body.baseUrl === null ? body.baseUrl : baseUrl(body.baseUrl);
@@ -87,11 +73,11 @@ async function update(req: Request, deps: AdminDeps, id: string): Promise<Respon
   return jsonResponse({ provider: deps.providers.get(id) });
 }
 
-async function refresh(deps: AdminDeps, id: string): Promise<Response> {
+async function refresh(_req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const provider = existing(deps, id);
   const connector = deps.connector(provider.connector);
   if (!connector) throw new InputError('connector 无效');
-  const access = providerAccess(deps, provider);
+  const access = providerAccess(deps.providers, provider);
   let models: ProviderModelInput[];
   try {
     models = await connector.models(access);
@@ -108,7 +94,7 @@ async function refresh(deps: AdminDeps, id: string): Promise<Response> {
   return jsonResponse({ models: discovered(deps, id) });
 }
 
-async function publish(req: Request, deps: AdminDeps, id: string): Promise<Response> {
+async function publish(req: Request, deps: AdminDeps, [id]: string[]): Promise<Response> {
   const body = await readBody(req);
   const upstreamId = string(body.upstreamId, 'upstreamId');
   existing(deps, id);
@@ -141,11 +127,11 @@ const routes: readonly AdminRoute[] = [
   ['GET', /^\/api\/gateway\/connectors$/, connectors],
   ['GET', /^\/api\/gateway\/providers$/, list],
   ['POST', /^\/api\/gateway\/providers$/, create],
-  ['PATCH', /^\/api\/gateway\/providers\/([^/]+)$/, (req, deps, [id]) => update(req, deps, id)],
+  ['PATCH', /^\/api\/gateway\/providers\/([^/]+)$/, update],
   ['DELETE', /^\/api\/gateway\/providers\/([^/]+)$/, remove],
   ['GET', /^\/api\/gateway\/providers\/([^/]+)\/models$/, listModels],
-  ['POST', /^\/api\/gateway\/providers\/([^/]+)\/refresh$/, (_req, deps, [id]) => refresh(deps, id)],
-  ['POST', /^\/api\/gateway\/providers\/([^/]+)\/publish$/, (req, deps, [id]) => publish(req, deps, id)],
+  ['POST', /^\/api\/gateway\/providers\/([^/]+)\/refresh$/, refresh],
+  ['POST', /^\/api\/gateway\/providers\/([^/]+)\/publish$/, publish],
 ];
 
 /** Handle provider and connector paths; return null for other paths. */
