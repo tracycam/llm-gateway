@@ -1,0 +1,274 @@
+// Provider management uses the real SQLite stores.
+import { Database } from 'bun:sqlite';
+import { expect, test } from 'bun:test';
+import type { Connector } from '../connectors/connector';
+import { UpstreamFailure } from '../connectors/connector';
+import { ModelStore } from '../modelStore';
+import { ProviderStore } from '../providerStore';
+import { migrate } from '../schema';
+import type { AdminDeps } from './deps';
+import { handleProviderRoute } from './providers';
+import { fixture, request, upstreamFailure } from './fixture.test-helper';
+
+test('credentials, refresh failure, publication and input validation', async () => {
+  const db = new Database(':memory:');
+  migrate(db);
+  let fail = false;
+  const connector: Connector = {
+    id: 'fake',
+    name: 'Fake',
+    defaultBaseUrl: 'https://example.com',
+    credential: 'api-key',
+    async target() { throw new Error('unused'); },
+    async models() {
+      if (fail) throw new UpstreamFailure('上游拒绝了凭证', 401);
+      return [{
+        upstreamId: 'upstream',
+        contextLength: null,
+        maxOutputTokens: null,
+        price: { input: null, output: null, cacheRead: null, cacheWrite: null },
+      }];
+    },
+  };
+  const deps: AdminDeps = {
+    providers: new ProviderStore(db),
+    models: new ModelStore(db),
+    connector: (id) => id === connector.id ? connector : null,
+    connectors: () => [connector],
+    now: () => new Date('2026-01-01T00:00:00Z'),
+  };
+  const call = (path: string, method = 'GET', body?: unknown) => handleProviderRoute(new Request(
+    `http://localhost/api/gateway${path}`,
+    { method, body: body === undefined ? undefined : JSON.stringify(body) }
+  ), deps);
+  expect((await call('/providers', 'POST', { name: 'a', connector: 'fake' }))?.status).toBe(400);
+  const unknown = await call('/providers', 'POST', { name: 'a', connector: 'unknown', apiKey: 'x' });
+  expect(unknown?.status).toBe(400);
+  expect((await call('/providers', 'POST', {
+    name: 'a', connector: 'fake', apiKey: 'x', baseUrl: 'https://u:p@example.com',
+  }))?.status).toBe(400);
+  const created = await call('/providers', 'POST', {
+    name: 'a', connector: 'fake', apiKey: 'secret-key', autoPublish: true,
+  });
+  expect(created?.status).toBe(201);
+  expect(await created?.text()).not.toContain('secret-key');
+  const id = deps.providers.list()[0].id;
+  for (const response of [await call('/providers'), await call(`/providers/${id}`, 'PATCH', { name: 'b' }),
+    await call(`/providers/${id}/models`), await call(`/providers/${id}/refresh`, 'POST')]) {
+    expect(await response?.text()).not.toContain('secret-key');
+  }
+  expect(deps.models.list()[0].routes[0].upstreamModel).toBe('upstream');
+  fail = true;
+  const failure = await call(`/providers/${id}/refresh`, 'POST');
+  expect(failure?.status).toBe(502);
+  expect(await failure?.text()).not.toContain('secret-key');
+  expect(deps.providers.models(id)).toHaveLength(1);
+  expect((await call('/providers', 'POST', { name: 'b', connector: 'fake', apiKey: 'x' }))?.status).toBe(409);
+  expect((await call(`/providers/${id}`, 'PATCH', { enabled: 'true' }))?.status).toBe(400);
+  expect(deps.providers.get(id)?.enabled).toBe(true);
+  expect((await call('/providers', 'PUT'))?.status).toBe(405);
+  expect(await call('/other')).toBeNull();
+  db.close();
+});
+
+const providerCases: Array<[string, unknown, string]> = [
+  ['name', undefined, 'name'],
+  ['name', 12, 'name'],
+  ['name', '', 'name'],
+  ['connector', undefined, 'connector'],
+  ['connector', 12, 'connector'],
+  ['connector', 'unknown', 'connector'],
+  ['baseUrl', 12, 'baseUrl'],
+  ['baseUrl', 'ftp://example.com', 'baseUrl'],
+  ['baseUrl', 'https://user:pass@example.com', 'baseUrl'],
+  ['apiKey', undefined, 'apiKey'],
+  ['apiKey', 12, 'apiKey'],
+  ['apiKey', '', 'apiKey'],
+  ['autoPublish', 'true', 'autoPublish'],
+];
+
+for (const [field, value, errorField] of providerCases) {
+  test(`POST providers rule 2: ${field} ${String(value)} rejected before store mutation`, async () => {
+    const { deps, db } = fixture();
+    const input = { name: 'p', connector: 'fake', apiKey: 'secret', [field]: value };
+    const response = await handleProviderRoute(request('/providers', 'POST', input), deps);
+    expect(response?.status).toBe(400);
+    expect((await response?.json()).error).toContain(errorField);
+    expect(deps.providers.list()).toHaveLength(0);
+    db.close();
+  });
+}
+
+for (const [field, value] of [
+  ['name', 1], ['baseUrl', 1], ['apiKey', 1], ['enabled', 1], ['autoPublish', 1],
+] as const) {
+  test(`PATCH providers rule 2: wrong ${field} rejected`, async () => {
+    const { deps, db } = fixture();
+    const provider = deps.providers.create({
+      name: 'p', connector: 'fake', baseUrl: null, credential: 'secret', autoPublish: false,
+    }, deps.now());
+    const req = request(`/providers/${provider.id}`, 'PATCH', { [field]: value });
+    const response = await handleProviderRoute(req, deps);
+    expect(response?.status).toBe(400);
+    expect((await response?.json()).error).toContain(field);
+    expect(deps.providers.get(provider.id)).toEqual(provider);
+    db.close();
+  });
+}
+
+test('PATCH providers baseUrl null uses default and is rejected without default', async () => {
+  const { deps, connector, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: 'https://local', credential: null, autoPublish: false,
+  }, deps.now());
+  const path = `/providers/${provider.id}`;
+  expect((await handleProviderRoute(request(path, 'PATCH', { baseUrl: null }), deps))?.status).toBe(200);
+  expect(deps.providers.get(provider.id)?.baseUrl).toBeNull();
+  connector.defaultBaseUrl = null;
+  const setUrl = await handleProviderRoute(request(path, 'PATCH', { baseUrl: 'https://local' }), deps);
+  expect(setUrl?.status).toBe(200);
+  const response = await handleProviderRoute(request(path, 'PATCH', { baseUrl: null }), deps);
+  expect(response?.status).toBe(400);
+  expect(deps.providers.get(provider.id)?.baseUrl).toBe('https://local');
+  db.close();
+});
+
+test('refresh propagates unexpected exceptions without replacing models', async () => {
+  const { deps, state, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
+  state.failure = new Error('bug');
+  const refreshRequest = request(`/providers/${provider.id}/refresh`, 'POST');
+  await expect(handleProviderRoute(refreshRequest, deps)).rejects.toThrow('bug');
+  expect(deps.providers.models(provider.id)).toHaveLength(1);
+  state.failure = upstreamFailure();
+  const response = await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
+  expect(response?.status).toBe(502);
+  expect(deps.providers.models(provider.id)).toHaveLength(1);
+  db.close();
+});
+
+for (const [path, method] of [
+  ['/connectors', 'POST'], ['/providers', 'PUT'], ['/providers/x', 'GET'],
+  ['/providers/x/models', 'POST'], ['/providers/x/refresh', 'GET'], ['/providers/x/publish', 'GET'],
+]) {
+  test(`${method} ${path}: rule 5 wrong method is 405`, async () => {
+    const { deps, db } = fixture();
+    expect((await handleProviderRoute(request(path, method), deps))?.status).toBe(405);
+    db.close();
+  });
+}
+
+test('GET connectors returns only form fields', async () => {
+  const { deps, db } = fixture();
+  const response = await handleProviderRoute(request('/connectors'), deps);
+  expect(await response?.json()).toEqual({ connectors: [{
+    id: 'fake', name: 'Fake', defaultBaseUrl: 'https://example.com', credential: 'api-key',
+  }] });
+  expect(deps.providers.list()).toHaveLength(0);
+  db.close();
+});
+
+test('POST publish creates a route and GET models marks it published', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const path = `/providers/${provider.id}`;
+  await handleProviderRoute(request(`${path}/refresh`, 'POST'), deps);
+  const req = request(`${path}/publish`, 'POST', { upstreamId: 'upstream' });
+  const response = await handleProviderRoute(req, deps);
+  expect(response?.status).toBe(201);
+  expect((await response?.json()).route.upstreamModel).toBe('upstream');
+  const listing = await handleProviderRoute(request(`${path}/models`), deps);
+  expect((await listing?.json()).models[0].published).toBe(true);
+  expect(deps.models.list()[0].routes).toHaveLength(1);
+  db.close();
+});
+
+for (const [path, method, body] of [
+  ['/providers/missing', 'PATCH', {}], ['/providers/missing', 'DELETE', undefined],
+  ['/providers/missing/models', 'GET', undefined], ['/providers/missing/refresh', 'POST', undefined],
+  ['/providers/missing/publish', 'POST', { upstreamId: 'x' }],
+] as const) {
+  test(`${method} ${path}: unknown provider is 404`, async () => {
+    const { deps, db } = fixture();
+    const response = await handleProviderRoute(request(path, method, body), deps);
+    expect(response?.status).toBe(404);
+    expect(deps.providers.list()).toHaveLength(0);
+    db.close();
+  });
+}
+
+test('DELETE provider removes it and its discovered models', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
+  expect((await handleProviderRoute(request(`/providers/${provider.id}`, 'DELETE'), deps))?.status).toBe(204);
+  expect(deps.providers.get(provider.id)).toBeNull();
+  expect(deps.providers.models(provider.id)).toHaveLength(0);
+  db.close();
+});
+
+test('providerAccess reads discovered models lazily once', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const { providerAccess } = await import('./providers');
+  const access = providerAccess(deps, provider);
+  await handleProviderRoute(request(`/providers/${provider.id}/refresh`, 'POST'), deps);
+  expect(access.model('upstream')?.upstreamId).toBe('upstream');
+  deps.providers.replaceModels(provider.id, [], deps.now());
+  expect(access.model('upstream')?.upstreamId).toBe('upstream');
+  db.close();
+});
+
+test('POST provider without default URL requires baseUrl', async () => {
+  const { deps, connector, db } = fixture();
+  connector.defaultBaseUrl = null;
+  const response = await handleProviderRoute(request('/providers', 'POST', {
+    name: 'p', connector: 'fake', apiKey: 'key',
+  }), deps);
+  expect(response?.status).toBe(400);
+  expect((await response?.json()).error).toContain('baseUrl');
+  expect(deps.providers.list()).toHaveLength(0);
+  db.close();
+});
+
+test('PATCH provider required apiKey cannot be removed', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: 'stored', autoPublish: false,
+  }, deps.now());
+  const req = request(`/providers/${provider.id}`, 'PATCH', { apiKey: null });
+  const response = await handleProviderRoute(req, deps);
+  expect(response?.status).toBe(400);
+  expect((await response?.json()).error).toContain('apiKey');
+  expect(deps.providers.credential(provider.id)).toBe('stored');
+  db.close();
+});
+
+test('POST publish rejects unknown upstream model with 404', async () => {
+  const { deps, db } = fixture();
+  const provider = deps.providers.create({
+    name: 'p', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+  }, deps.now());
+  const response = await handleProviderRoute(request(`/providers/${provider.id}/publish`, 'POST', {
+    upstreamId: 'missing',
+  }), deps);
+  expect(response?.status).toBe(404);
+  expect(deps.models.list()).toHaveLength(0);
+  db.close();
+});
+
+test('rule 6 provider path rejects encoded slash', async () => {
+  const { deps, db } = fixture();
+  expect(await handleProviderRoute(request('/providers/a%2Fb', 'DELETE'), deps)).toBeNull();
+  expect(deps.providers.list()).toHaveLength(0);
+  db.close();
+});
