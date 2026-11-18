@@ -39,11 +39,6 @@ function addProvider(providers: ProviderStore, name: string, connector = 'fake')
   }, now);
 }
 
-/** Put a route at a chosen id so the store's id order is the test's order. */
-function renameRoute(db: Database, id: string, name: string): void {
-  db.query('UPDATE routes SET id = ? WHERE id = ?').run(name, id);
-}
-
 test('a disabled route is left out', () => {
   const { db, providers, models, connector } = setup();
   try {
@@ -125,10 +120,8 @@ test('a usable route after a disabled route is still returned', () => {
     const provider = addProvider(providers, 'provider');
     const model = models.create({ name: 'model' }, now);
     const first = models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'first' });
-    const second = models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'second' });
-    renameRoute(db, first.id, 'rte-a');
-    renameRoute(db, second.id, 'rte-z');
-    models.updateRoute('rte-a', { enabled: false });
+    models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'second' });
+    models.updateRoute(first.id, { enabled: false });
     const usable = usableRoutes(models.get(model.id)!, providers, connector);
     expect(usable.map(({ route }) => route.upstreamModel)).toEqual(['second']);
   } finally {
@@ -142,10 +135,8 @@ test("a usable route after a disabled provider's route is still returned", () =>
     const disabled = addProvider(providers, 'disabled');
     const enabled = addProvider(providers, 'enabled');
     const model = models.create({ name: 'model' }, now);
-    const first = models.addRoute(model.id, { providerId: disabled.id, upstreamModel: 'first' });
-    const second = models.addRoute(model.id, { providerId: enabled.id, upstreamModel: 'second' });
-    renameRoute(db, first.id, 'rte-a');
-    renameRoute(db, second.id, 'rte-z');
+    models.addRoute(model.id, { providerId: disabled.id, upstreamModel: 'first' });
+    models.addRoute(model.id, { providerId: enabled.id, upstreamModel: 'second' });
     providers.update(disabled.id, { enabled: false });
     const usable = usableRoutes(models.get(model.id)!, providers, connector);
     expect(usable.map(({ route }) => route.upstreamModel)).toEqual(['second']);
@@ -160,10 +151,8 @@ test('a usable route after an unknown connector route is still returned', () => 
     const unknown = addProvider(providers, 'unknown', 'unknown');
     const known = addProvider(providers, 'known');
     const model = models.create({ name: 'model' }, now);
-    const first = models.addRoute(model.id, { providerId: unknown.id, upstreamModel: 'first' });
-    const second = models.addRoute(model.id, { providerId: known.id, upstreamModel: 'second' });
-    renameRoute(db, first.id, 'rte-a');
-    renameRoute(db, second.id, 'rte-z');
+    models.addRoute(model.id, { providerId: unknown.id, upstreamModel: 'first' });
+    models.addRoute(model.id, { providerId: known.id, upstreamModel: 'second' });
     const usable = usableRoutes(models.get(model.id)!, providers, connector);
     expect(usable.map(({ route }) => route.upstreamModel)).toEqual(['second']);
   } finally {

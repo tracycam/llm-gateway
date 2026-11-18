@@ -81,6 +81,21 @@ const routeSelect = `SELECT routes.*, providers.name AS provider_name FROM route
   JOIN providers ON providers.id = routes.provider_id`;
 const emptyPrice: Price = { input: null, output: null, cacheRead: null, cacheWrite: null };
 
+/**
+ * The price a publish writes onto the new route of a model that already exists, or null to let the
+ * route follow the model. A route price must be usable for costing, and it only earns its place
+ * when it says something the model price does not.
+ */
+function publishedRoutePrice(discovered: Price, modelPrice: Price): Price | null {
+  if (discovered.input === null || discovered.output === null) return null;
+  const differs =
+    discovered.input !== modelPrice.input ||
+    discovered.output !== modelPrice.output ||
+    discovered.cacheRead !== modelPrice.cacheRead ||
+    discovered.cacheWrite !== modelPrice.cacheWrite;
+  return differs ? discovered : null;
+}
+
 function mapRoute(row: RouteRow): RouteRecord {
   return {
     id: row.id,
@@ -185,21 +200,29 @@ export class ModelStore {
         'SELECT * FROM provider_models WHERE provider_id = ? AND upstream_id = ?'
       ).get(providerId, upstreamId);
       if (!discovered) throw new StoreRefusal('未找到提供商模型', 404);
+      const discoveredPrice: Price = {
+        input: discovered.input_price,
+        output: discovered.output_price,
+        cacheRead: discovered.cache_read_price,
+        cacheWrite: discovered.cache_write_price,
+      };
       const model = this.byName(upstreamId) ?? this.create({
         name: upstreamId,
         contextLength: discovered.context_length,
-        price: {
-          input: discovered.input_price,
-          output: discovered.output_price,
-          cacheRead: discovered.cache_read_price,
-          cacheWrite: discovered.cache_write_price,
-        },
+        price: discoveredPrice,
       }, now);
       const existing = this.db.query<RouteRow, [string, string, string]>(`${routeSelect}
         WHERE routes.model_id = ? AND routes.provider_id = ? AND routes.upstream_model = ?`)
         .get(model.id, providerId, upstreamId);
-      return existing ? mapRoute(existing)
-        : this.addRoute(model.id, { providerId, upstreamModel: upstreamId });
+      if (existing) return mapRoute(existing);
+      // A model this publish has just created carries the discovered price itself, so its
+      // route gets none; a later provider's price is the route's own when it differs.
+      const price = publishedRoutePrice(discoveredPrice, model.price);
+      return this.addRoute(model.id, {
+        providerId,
+        upstreamModel: upstreamId,
+        ...(price === null ? {} : { price }),
+      });
     })();
   }
 
@@ -221,8 +244,12 @@ export class ModelStore {
       contextLength: row.context_length,
       enabled: row.enabled !== 0,
       createdAt: row.created_at,
-      routes: this.db.query<RouteRow, [string]>(`${routeSelect} WHERE routes.model_id = ? ORDER BY routes.id`)
-        .all(row.id).map(mapRoute),
+      // `routes` has no creation column: rowid grows with insertion, which is the order the
+      // design gives a model's routes. The only VACUUM is in the version-1 migration, before
+      // this table exists, so it never renumbers these rows.
+      routes: this.db.query<RouteRow, [string]>(
+        `${routeSelect} WHERE routes.model_id = ? ORDER BY routes.rowid`
+      ).all(row.id).map(mapRoute),
     };
   }
 

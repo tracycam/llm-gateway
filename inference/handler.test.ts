@@ -173,8 +173,6 @@ test('rule 7: successful attempts reset consecutive unavailable failures', async
 
 test('rule 4: the heavier route is picked before an idle lighter route', async () => {
   const f = fixture({ routes: 2 });
-  f.db.query('UPDATE routes SET id = ? WHERE id = ?').run('rte-a', f.routes[0].id);
-  f.db.query('UPDATE routes SET id = ? WHERE id = ?').run('rte-z', f.routes[1].id);
   const ordered = f.models.get(f.model.id)!.routes;
   f.models.updateRoute(ordered[1].id, { weight: 5 });
   expect(ordered[1].upstreamModel).toBe(f.routes[1].upstreamModel);
