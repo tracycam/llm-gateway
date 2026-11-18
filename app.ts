@@ -102,7 +102,7 @@ function modelName(raw: string): string | null {
   }
 }
 
-/** The inference API under `/v1`: models, Chat Completions and Messages. */
+/** The inference API under `/v1`: models, Chat Completions, Messages and Responses. */
 async function inferenceRoute(
   req: Request,
   pathname: string,
@@ -115,6 +115,9 @@ async function inferenceRoute(
   }
   if (pathname === '/v1/messages' && req.method === 'POST') {
     return withCors(await handleInference(req, 'messages', deps));
+  }
+  if (pathname === '/v1/responses' && req.method === 'POST') {
+    return withCors(await handleInference(req, 'responses', deps));
   }
   if (pathname === '/v1/models' && req.method === 'GET') {
     return withCors(handleModelList(req, { ...models, now: deps.now }));

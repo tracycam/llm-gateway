@@ -9,7 +9,7 @@ import { LoginExpired } from '../connectors/tokens';
 import type { Usage } from '../pricing';
 import { bridgeRequest, bridgeResponse, bridgeStream, type Bridge, type Finished } from '../protocols/bridge';
 import { parseJson } from '../protocols/json';
-import { protocolModule, type Protocol } from '../protocols/protocol';
+import { protocolModule, canServe, type Protocol } from '../protocols/protocol';
 import { isRefused } from '../protocols/refusal';
 import { classify, type Outcome } from '../router';
 
@@ -44,6 +44,8 @@ export type AttemptResult =
   | { kind: 'stream'; body: ReadableStream<Uint8Array>; finished: Promise<Finished> }
   /** The request cannot be expressed in this route's protocol. Nothing was sent upstream. */
   | { kind: 'refused'; message: string; param: string }
+  /** This route speaks a protocol that cannot be bridged to the client's; nothing was sent. */
+  | { kind: 'incompatible'; protocol: Protocol }
   /** The upstream says the request itself is at fault. `body` is for the client. */
   | { kind: 'rejected'; status: number; body: string }
   /** This route could not serve the request; another one may. Nothing reached the client. */
@@ -177,6 +179,11 @@ export async function attempt(input: AttemptInput): Promise<AttemptResult> {
     // Connectors report expected target failures as UpstreamFailure; programming errors propagate.
     if (error instanceof UpstreamFailure) return failed({ kind: 'route' }, null, error.message);
     throw error;
+  }
+  // The Responses API is passed through in both directions and never translated: a route that
+  // speaks a different protocol with it on either side cannot serve this request.
+  if (!canServe(input.inbound, target.protocol)) {
+    return { kind: 'incompatible', protocol: target.protocol };
   }
   const bridge: Bridge = {
     inbound: input.inbound,

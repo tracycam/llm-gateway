@@ -480,3 +480,125 @@ test('rule B5: another target error marks no credential', async () => {
   });
   expect(rejected).toBe(0);
 });
+
+// --- Responses API: passthrough only, in both directions -----------------------------------
+
+const RESPONSES_USAGE = {
+  input_tokens: 5,
+  input_tokens_details: { cached_tokens: 2, cache_write_tokens: 1 },
+  output_tokens: 3,
+};
+const responsesBody = JSON.stringify({
+  id: 'resp_1',
+  object: 'response',
+  status: 'completed',
+  model: 'm',
+  output: [{
+    id: 'msg_1', type: 'message', role: 'assistant',
+    content: [{ type: 'output_text', text: 'hi', annotations: [] }],
+  }],
+  usage: RESPONSES_USAGE,
+});
+const responsesUsage = { inputTokens: 3, outputTokens: 3, cacheReadTokens: 2 };
+const responsesStart = [
+  event('response.created', { response: { id: 'resp_1', status: 'in_progress' } }),
+  event('response.output_item.added', { output_index: 0, item: { id: 'msg_1', type: 'message' } }),
+  event('response.output_text.delta', { item_id: 'msg_1', delta: 'hi' }),
+].join('');
+const responsesEnd = event('response.completed', {
+  response: { id: 'resp_1', status: 'completed', usage: RESPONSES_USAGE },
+});
+const responsesStream = responsesStart + responsesEnd;
+
+test('Responses passthrough: a complete body is returned unchanged with its usage', async () => {
+  const s = stub(() => new Response(responsesBody));
+  try {
+    const req = input(s.server.url.href, 'responses', 'responses');
+    req.body = { model: 'client-model', input: 'hello' };
+    expect(await attempt(req)).toEqual({
+      kind: 'complete', body: responsesBody, usage: responsesUsage,
+    });
+    expect(s.requests[0]?.path).toBe('/');
+    expect(JSON.parse(s.requests[0]!.body)).toEqual({ model: 'chosen', input: 'hello' });
+  } finally { s.server.stop(true); }
+});
+
+test('Responses passthrough: every stream frame arrives unchanged and in order', async () => {
+  const s = stub(() => new Response(responsesStream, {
+    headers: { 'content-type': 'text/event-stream' },
+  }));
+  try {
+    const req = input(s.server.url.href, 'responses', 'responses');
+    req.body = { model: 'client-model', input: 'hello', stream: true };
+    const result = await attempt(req);
+    if (result.kind !== 'stream') throw new Error(JSON.stringify(result));
+    expect(await new Response(result.body).text()).toBe(responsesStream);
+    expect(await result.finished).toEqual({ usage: responsesUsage, error: null, cancelled: false });
+    expect(s.requests[0]?.headers.get('accept')).toBe('text/event-stream');
+  } finally { s.server.stop(true); }
+});
+
+test('Responses passthrough: preamble is held, so a failure before content fails the route', async () => {
+  const failed = event('response.failed', {
+    response: { id: 'resp_1', status: 'failed', error: { code: 'server_error', message: 'boom' } },
+  });
+  const preamble = responsesStart.slice(0, responsesStart.indexOf('event: response.output_item'));
+  const text = preamble + failed;
+  const s = stub(() => new Response(text, { headers: { 'content-type': 'text/event-stream' } }));
+  try {
+    const req = input(s.server.url.href, 'responses', 'responses');
+    req.body = { model: 'client-model', input: 'hello', stream: true };
+    expect(await attempt(req)).toEqual({
+      kind: 'failed', outcome: { kind: 'unavailable' }, status: 200, reason: 'boom',
+    });
+  } finally { s.server.stop(true); }
+});
+
+test('Responses passthrough: an in-band failure after content reaches the client untouched', async () => {
+  const failed = event('response.failed', {
+    response: { id: 'resp_1', status: 'failed', error: { code: 'server_error', message: 'boom' } },
+  });
+  const text = responsesStart + failed;
+  const s = stub(() => new Response(text, { headers: { 'content-type': 'text/event-stream' } }));
+  try {
+    const req = input(s.server.url.href, 'responses', 'responses');
+    req.body = { model: 'client-model', input: 'hello', stream: true };
+    const result = await attempt(req);
+    if (result.kind !== 'stream') throw new Error(JSON.stringify(result));
+    expect(await new Response(result.body).text()).toBe(text);
+    expect(await result.finished).toEqual({ usage: null, error: 'boom', cancelled: false });
+  } finally { s.server.stop(true); }
+});
+
+test('Responses passthrough: a truncated stream gets an error frame in its own shape', async () => {
+  const text = responsesStart;
+  const s = stub(() => new Response(text, { headers: { 'content-type': 'text/event-stream' } }));
+  try {
+    const req = input(s.server.url.href, 'responses', 'responses');
+    req.body = { model: 'client-model', input: 'hello', stream: true };
+    const result = await attempt(req);
+    if (result.kind !== 'stream') throw new Error(JSON.stringify(result));
+    expect(await new Response(result.body).text()).toBe(text +
+      'event: error\ndata: {"error":{"message":"Upstream stream ended before terminator",' +
+      '"type":"api_error","code":null,"param":null}}\n\n');
+    expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+  } finally { s.server.stop(true); }
+});
+
+test('a Chat request is never sent to an upstream that speaks only Responses', async () => {
+  const s = stub(() => new Response(responsesBody));
+  try {
+    const req = input(s.server.url.href, 'chat', 'responses');
+    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocol: 'responses' });
+    expect(s.requests).toHaveLength(0);
+  } finally { s.server.stop(true); }
+});
+
+test('a Responses request is never sent to an upstream that speaks only Chat', async () => {
+  const s = stub(() => new Response(complete('chat')));
+  try {
+    const req = input(s.server.url.href, 'responses', 'chat');
+    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocol: 'chat' });
+    expect(s.requests).toHaveLength(0);
+  } finally { s.server.stop(true); }
+});

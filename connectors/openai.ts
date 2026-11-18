@@ -12,6 +12,8 @@ interface Vendor {
   name: string;
   defaultBaseUrl: string | null;
   keyRequired: boolean;
+  /** Whether the vendor serves the Responses API next to Chat Completions. */
+  responses: boolean;
   /** One entry of this vendor's model list as the gateway records it. */
   model(item: JsonObject): Omit<ProviderModelInput, 'upstreamId'>;
 }
@@ -83,9 +85,12 @@ function connector(vendor: Vendor): Connector {
     name: vendor.name,
     defaultBaseUrl: vendor.defaultBaseUrl,
     credential: vendor.keyRequired ? 'api-key' : 'optional-api-key',
-    async target(provider) {
-      const { url, headers } = request(provider, '/chat/completions');
-      return { url, headers, protocol: 'chat' };
+    async target(provider, _upstreamModel, inbound) {
+      // A Responses client is passed through to the vendor's own Responses route; a Chat or
+      // Messages client goes to Chat Completions, where the vendor translates it.
+      const passThrough = inbound === 'responses' && vendor.responses;
+      const { url, headers } = request(provider, passThrough ? '/responses' : '/chat/completions');
+      return { url, headers, protocol: passThrough ? 'responses' : 'chat' };
     },
     async models(provider) {
       const { url, headers, key } = request(provider, '/models');
@@ -107,25 +112,29 @@ export const openrouter = connector({
   name: 'OpenRouter',
   defaultBaseUrl: 'https://openrouter.ai/api/v1',
   keyRequired: true,
+  responses: false,
   model: openrouterModel,
 });
-/** xAI's Chat Completions API. */
+/** xAI's OpenAI-compatible API: Chat Completions and Responses. */
 export const xai = connector({
   id: 'xai',
   name: 'xAI',
   defaultBaseUrl: 'https://api.x.ai/v1',
   keyRequired: true,
+  responses: true,
   model: xaiModel,
 });
 /**
  * The OpenAI API and every server that speaks its Chat Completions protocol. The address is the
  * official one until the administrator gives another; the key is optional because a server on
- * the local network may need none, and no key means no `Authorization` header at all.
+ * the local network may need none, and no key means no `Authorization` header at all. The
+ * Responses API is served at `/responses` when the administrator's server has it.
  */
 export const openaiCompatible = connector({
   id: 'openai-compatible',
   name: 'OpenAI-compatible',
   defaultBaseUrl: 'https://api.openai.com/v1',
   keyRequired: false,
+  responses: true,
   model: openaiModel,
 });

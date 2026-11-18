@@ -4,9 +4,10 @@ import type { Usage } from '../pricing';
 import type { SseFrame } from './sse';
 import { chat } from './chat';
 import { messages } from './messages';
+import { responses } from './responses';
 
 /** An upstream inference wire protocol. */
-export type Protocol = 'chat' | 'messages';
+export type Protocol = 'chat' | 'messages' | 'responses';
 /** What a frame of an upstream response stream is to the gateway. */
 export type FrameKind =
   /** Nothing the model produced yet; held back until content follows. */
@@ -42,5 +43,17 @@ export interface ProtocolModule {
 
 /** Return the implementation for the requested protocol. */
 export function protocolModule(protocol: Protocol): ProtocolModule {
-  return protocol === 'chat' ? chat : messages;
+  if (protocol === 'chat') return chat;
+  if (protocol === 'messages') return messages;
+  return responses;
+}
+
+/**
+ * Whether an upstream speaking `upstream` can answer a request written in `inbound`: the same
+ * protocol, or the Chat/Messages pair the bridge translates. The Responses API has no
+ * translator in either direction and is served by passthrough only.
+ */
+export function canServe(inbound: Protocol, upstream: Protocol): boolean {
+  if (inbound === upstream) return true;
+  return inbound !== 'responses' && upstream !== 'responses';
 }

@@ -234,11 +234,31 @@ function serveRejected(ctx: Context, route: UsableRoute, result: Rejected): Serv
   return served(jsonAnswer(result.body, result.status));
 }
 
+/** The inference entry a protocol's clients call, as the 400 of an untranslatable route names it. */
+function entryPath(protocol: Protocol): string {
+  if (protocol === 'chat') return '/v1/chat/completions';
+  if (protocol === 'messages') return '/v1/messages';
+  return '/v1/responses';
+}
+
+/**
+ * The 400 for a request whose model has no route it can be passed through to: the Responses API
+ * is served by passthrough only, so a client of it needs a route that speaks it, and a Chat or
+ * Messages request needs a route that is not Responses. Names the interface the model has.
+ */
+function incompatibleResponse(ctx: Context, skipped: Protocol[]): Response {
+  const entries = [...new Set(skipped)].map(entryPath);
+  const message = `Model "${ctx.model.name}" is not available on ${entryPath(ctx.inbound)};` +
+    ` use ${entries.join(' or ')}`;
+  return errorResponse(ctx.inbound, 400, message);
+}
+
 /** Serve the last failure or refusal when no more routes can be tried. */
 function serveExhausted(
   ctx: Context,
   failure: { result: Failed; route: UsableRoute } | null,
   refusal: Refused | null,
+  skipped: Protocol[],
 ): Served {
   if (failure) {
     const { result, route } = failure;
@@ -252,6 +272,7 @@ function serveExhausted(
     return served(response);
   }
   if (refusal) return served(errorResponse(ctx.inbound, 400, refusal.message, refusal.param));
+  if (skipped.length) return served(incompatibleResponse(ctx, skipped));
   return served(errorResponse(ctx.inbound, 503, 'No route available'));
 }
 
@@ -293,6 +314,8 @@ async function tryRoutes(ctx: Context): Promise<Served> {
   const tried = new Set<string>();
   let failure: { result: Failed; route: UsableRoute } | null = null;
   let refusal: Refused | null = null;
+  /** Protocols of the routes skipped because the request cannot be passed through to them. */
+  const skipped: Protocol[] = [];
   const candidates: Candidate[] = ctx.routes.map(({ route }, order) => ({
     id: route.id,
     weight: route.weight,
@@ -301,11 +324,22 @@ async function tryRoutes(ctx: Context): Promise<Served> {
   }));
   while (true) {
     const picked = ctx.deps.router.pick(candidates, tried, ctx.deps.now().getTime());
-    if ('none' in picked) return serveExhausted(ctx, failure, refusal);
+    if ('none' in picked) {
+      // The 400 for an interface the model lacks is true only when every usable route was
+      // tried. A route still cooling down may serve this interface, and answering 400 would
+      // both deny it and send the client to another interface: keep the 503 that a missing
+      // route gives today.
+      const everyRouteTried = tried.size === ctx.routes.length;
+      return serveExhausted(ctx, failure, refusal, everyRouteTried ? skipped : []);
+    }
     const route = routeById(ctx.routes, picked.route.id);
     const result = await attemptOn(ctx, route);
     tried.add(route.route.id);
     if (result.kind === 'abandoned') return served(errorResponse(ctx.inbound, 499, 'Client disconnected'));
+    if (result.kind === 'incompatible') {
+      skipped.push(result.protocol);
+      continue;
+    }
     if (result.kind === 'refused') {
       refusal = result;
       continue;
@@ -320,7 +354,7 @@ async function tryRoutes(ctx: Context): Promise<Served> {
   }
 }
 
-/** Answers Chat Completions and Messages inference requests. */
+/** Answers Chat Completions, Messages and Responses inference requests. */
 export async function handleInference(
   req: Request, inbound: Protocol, deps: InferenceDeps,
 ): Promise<Response> {

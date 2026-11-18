@@ -47,6 +47,44 @@ test('a provider without an address uses the default address for inference', asy
   });
 });
 
+test('a Responses client goes to the Responses route of openai-compatible', async () => {
+  expect(await openaiCompatible.target(provider(null), 'm', 'responses')).toEqual({
+    url: 'https://api.openai.com/v1/responses',
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'responses',
+  });
+  const base = stub(() => Response.json({ data: [] }));
+  expect(await openaiCompatible.target(provider(base), 'm', 'responses')).toEqual({
+    url: `${base}/responses`,
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'responses',
+  });
+});
+
+test('a Responses client goes to the Responses route of xAI', async () => {
+  expect(await xai.target(provider(null), 'm', 'responses')).toEqual({
+    url: 'https://api.x.ai/v1/responses',
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'responses',
+  });
+});
+
+test('openrouter keeps a Responses client on Chat Completions', async () => {
+  expect(await openrouter.target(provider(null), 'm', 'responses')).toEqual({
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    headers: { Authorization: 'Bearer secret-key' },
+    protocol: 'chat',
+  });
+});
+
+test('anthropic-compatible keeps a Responses client on Messages', async () => {
+  expect(await anthropicCompatible.target(provider(null), 'm', 'responses')).toEqual({
+    url: 'https://api.anthropic.com/v1/messages',
+    headers: { 'anthropic-version': '2026-10-21', 'x-api-key': 'secret-key' },
+    protocol: 'messages',
+  });
+});
+
 test('model discovery uses the default address when the provider has none', async () => {
   const urls = await intercepted(() => openaiCompatible.models(provider(null)));
   expect(urls).toEqual(['https://api.openai.com/v1/models']);

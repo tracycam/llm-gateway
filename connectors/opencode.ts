@@ -82,6 +82,13 @@ function target(provider: ProviderAccess, defaultBase: string, inbound: Protocol
       headers: { ...headers, 'anthropic-version': ANTHROPIC_VERSION },
     };
   }
+  if (inbound === 'responses') {
+    return {
+      url: endpoint(provider, defaultBase, '/openai/v1/responses'),
+      protocol: 'responses',
+      headers,
+    };
+  }
   return {
     url: endpoint(provider, defaultBase, '/openai/v1/chat/completions'),
     protocol: 'chat',

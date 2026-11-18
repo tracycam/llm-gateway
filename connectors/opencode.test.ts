@@ -157,6 +157,18 @@ for (const preset of presets) {
     });
   });
 
+  test(`${preset.id} Responses target is the Responses root with the same headers`, async () => {
+    const s = stub(() => new Response());
+    const target = await preset.connector.target(access(preset, s.base), 'gpt-6.2-sol', 'responses');
+    expect(target.url).toBe(`${s.base}/openai/v1/responses`);
+    expect(target.protocol).toBe('responses');
+    expect(target.headers).toEqual({
+      Authorization: `Bearer ${KEY}`,
+      'User-Agent': USER_AGENT,
+      'x-opencode-session': `aihub-gateway-${preset.id}`,
+    });
+  });
+
   test(`${preset.id} Messages target is the Messages root with anthropic-version`, async () => {
     const s = stub(() => new Response());
     const target = await preset.connector.target(access(preset, s.base), 'claude-haiku-5-5', 'messages');

@@ -30,6 +30,32 @@ interface UpstreamCall {
   body: Record<string, unknown> | null;
 }
 
+/** The body an upstream speaking the Responses API answers a non-streaming request with. */
+const RESPONSES_ANSWER = JSON.stringify({
+  id: 'resp_stub',
+  object: 'response',
+  status: 'completed',
+  model: 'upstream-responses',
+  output: [{
+    id: 'msg_stub', type: 'message', role: 'assistant',
+    content: [{ type: 'output_text', text: 'responses answer', annotations: [] }],
+  }],
+  usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3 },
+});
+
+/** A Responses stream: one created event, one delta, then the terminal event carrying usage. */
+const RESPONSES_STREAM = [
+  { type: 'response.created', response: { id: 'resp_stub', status: 'in_progress' } },
+  { type: 'response.output_text.delta', item_id: 'msg_stub', delta: 'responses answer' },
+  {
+    type: 'response.completed',
+    response: {
+      id: 'resp_stub', status: 'completed',
+      usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3 },
+    },
+  },
+].map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join('');
+
 /** Records provider requests and answers like an OpenAI-compatible upstream. */
 function stubFetch(upstream?: (body: Record<string, unknown> | null) => Response | undefined) {
   const calls: UpstreamCall[] = [];
@@ -40,6 +66,12 @@ function stubFetch(upstream?: (body: Record<string, unknown> | null) => Response
       calls.push({ url, body });
       const overridden = upstream?.(body);
       if (overridden !== undefined) return overridden;
+      if (url.endsWith('/responses')) {
+        if (body?.stream === true) {
+          return new Response(RESPONSES_STREAM, { headers: { 'content-type': 'text/event-stream' } });
+        }
+        return new Response(RESPONSES_ANSWER, { headers: { 'content-type': 'application/json' } });
+      }
       if (body?.stream === true) {
         const frames = [
           { choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] },
@@ -73,7 +105,10 @@ const connector: Connector = {
   name: 'Stub',
   defaultBaseUrl: null,
   credential: 'optional-api-key',
-  async target() {
+  async target(_provider, _upstreamModel, inbound) {
+    if (inbound === 'responses') {
+      return { url: 'http://upstream.test/responses', headers: {}, protocol: 'responses' };
+    }
     return { url: 'http://upstream.test/chat/completions', headers: {}, protocol: 'chat' };
   },
   async models() {
@@ -223,6 +258,50 @@ test('POST /v1/messages is answered by the inference handler in the Messages sha
   const body = await response.json() as { type: string; content: Array<{ type: string; text: string }> };
   expect(body.type).toBe('message');
   expect(body.content[0]).toEqual({ type: 'text', text: 'stub answer' });
+});
+
+test('POST /v1/responses is answered by the inference handler in the Responses shape', async () => {
+  const f = setup();
+  const response = await withKey(f, '/v1/responses', post({ model: 'stub-model', input: 'hi' }));
+  expect(response.status).toBe(200);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  expect(await response.text()).toBe(RESPONSES_ANSWER);
+  expect(f.calls[0].url).toBe('http://upstream.test/responses');
+});
+
+test('a /v1/responses stream is passed through in order with CORS', async () => {
+  const f = setup();
+  const response = await withKey(f, '/v1/responses', post({
+    model: 'stub-model', input: 'hi', stream: true,
+  }));
+  expect(response.status).toBe(200);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  expect(response.headers.get('content-type')).toContain('text/event-stream');
+  expect(await response.text()).toBe(RESPONSES_STREAM);
+});
+
+test('POST /v1/responses needs a key; the admin bearer token and cookie never count', async () => {
+  const f = setup();
+  const body = { method: 'POST', body: JSON.stringify({ model: 'stub-model', input: 'hi' }) };
+  const missing = await f.request('/v1/responses', body);
+  expect(missing.status).toBe(401);
+  expect(missing.headers.get('access-control-allow-origin')).toBe('*');
+  expect(await missing.json()).toEqual({
+    error: { message: 'Invalid API key', type: 'authentication_error', code: null, param: null },
+  });
+  const admin = { ...body, headers: { authorization: `Bearer ${ADMIN}` } };
+  expect((await f.request('/v1/responses', admin)).status).toBe(401);
+  const cookie = { ...body, headers: { cookie: issueCookie(ADMIN).split(';')[0] } };
+  expect((await f.request('/v1/responses', cookie)).status).toBe(401);
+});
+
+test('other methods on /v1/responses are unsupported like on its siblings', async () => {
+  const f = setup();
+  const response = await withKey(f, '/v1/responses');
+  expect(response.status).toBe(404);
+  expect(response.headers.get('access-control-allow-origin')).toBe('*');
+  const body = await response.json() as { error: { message: string; type: string } };
+  expect(body.error.message).toBe('Unsupported route: GET /v1/responses');
 });
 
 test('GET /v1/models lists the model and GET /v1/models/<name> finds it', async () => {

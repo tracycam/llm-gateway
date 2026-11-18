@@ -128,7 +128,8 @@ function streamWriter(
 
 /** Format a gateway-generated streaming error in the client's protocol. */
 function errorFrame(protocol: Protocol, status: number, message: string): string {
-  const prefix = protocol === 'messages' ? 'event: error\n' : '';
+  // Messages names most frames, and a Responses error is an `error` event; Chat has neither.
+  const prefix = protocol === 'chat' ? '' : 'event: error\n';
   const body = protocolModule(protocol).errorBody(status, message);
   return `${prefix}data: ${JSON.stringify(body)}\n\n`;
 }

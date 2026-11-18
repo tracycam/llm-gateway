@@ -34,9 +34,15 @@ function openaiStub(answer: string) {
       if (pathname === '/models') {
         return Response.json({
           object: 'list',
-          data: ['upstream-chat', 'upstream-reject', 'fail-500', 'dual-a', 'dual-b', 'backup-model']
-            .map((id) => ({ id, object: 'model' })),
+          data: ['upstream-chat', 'upstream-reject', 'fail-500', 'dual-a', 'dual-b', 'backup-model',
+            'upstream-responses'].map((id) => ({ id, object: 'model' })),
         });
+      }
+      if (pathname === '/responses') {
+        if (body?.stream === true) {
+          return new Response(RESPONSES_STREAM, { headers: { 'content-type': 'text/event-stream' } });
+        }
+        return new Response(RESPONSES_ANSWER, { headers: { 'content-type': 'application/json' } });
       }
       if (pathname !== '/chat/completions') return new Response('not found', { status: 404 });
       if (body?.model === 'fail-500') {
@@ -142,6 +148,32 @@ let messagesProviderId: string;
 let messagesModelId: string;
 let keyToken: string;
 let keyId: string;
+
+/** The body an OpenAI-compatible upstream answers a non-streaming Responses request with. */
+const RESPONSES_ANSWER = JSON.stringify({
+  id: 'resp_stub',
+  object: 'response',
+  status: 'completed',
+  model: 'upstream-responses',
+  output: [{
+    id: 'msg_stub', type: 'message', role: 'assistant',
+    content: [{ type: 'output_text', text: 'responses answer', annotations: [] }],
+  }],
+  usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3 },
+});
+
+/** The same upstream's Responses stream: created, one delta, then the terminal event. */
+const RESPONSES_STREAM = [
+  { type: 'response.created', response: { id: 'resp_stub', status: 'in_progress' } },
+  { type: 'response.output_text.delta', item_id: 'msg_stub', delta: 'responses answer' },
+  {
+    type: 'response.completed',
+    response: {
+      id: 'resp_stub', status: 'completed',
+      usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3 },
+    },
+  },
+].map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join('');
 
 function startGateway(directory: string, listenPort: number): RunningGateway {
   const state = { text: '' };
@@ -522,3 +554,34 @@ test('12. an existing version-2 database starts and its old key authenticates on
     fs.rmSync(legacyDir, { recursive: true, force: true });
   }
 }, 30_000);
+
+test('13. a Responses client is passed through to an upstream that speaks Responses', async () => {
+  const providerId = await createProvider('openai-compatible', openai.url, 'responses upstream');
+  await adminJson(`/api/gateway/providers/${providerId}/refresh`, 'POST');
+  await publishModel(providerId, 'upstream-responses');
+
+  const complete = await client('/v1/responses', post({
+    model: 'upstream-responses', input: 'hi',
+  }));
+  expect(complete.status).toBe(200);
+  expect(await complete.text()).toBe(RESPONSES_ANSWER);
+
+  const stream = await client('/v1/responses', post({
+    model: 'upstream-responses', input: 'hi', stream: true,
+  }));
+  expect(stream.status).toBe(200);
+  expect(stream.headers.get('content-type')).toBe('text/event-stream');
+  expect(await stream.text()).toBe(RESPONSES_STREAM);
+
+  const row = await until('usage for upstream-responses', async () => {
+    const answer = await adminJson<{ rows: Array<Record<string, number | string>> }>(
+      '/api/gateway/usage?by=model'
+    );
+    const found = answer.rows.find((item) => item.modelName === 'upstream-responses');
+    return found?.requests === 2 ? found : undefined;
+  });
+  // Each request reported 12 input tokens of which 2 were cache reads, and 3 output tokens.
+  expect(row.inputTokens).toBe(20);
+  expect(row.cacheReadTokens).toBe(4);
+  expect(row.outputTokens).toBe(6);
+}, 20_000);
