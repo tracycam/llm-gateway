@@ -2,7 +2,9 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { providerAccess } from '../connectors/access';
-import { UpstreamFailure, type Connector, type ProviderAccess } from '../connectors/connector';
+import {
+  UpstreamFailure, type Connector, type ProviderAccess, type UpstreamTarget,
+} from '../connectors/connector';
 import { CredentialRenewals } from '../connectors/tokens';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
@@ -402,16 +404,19 @@ test('stream finished error redacts upstream key without changing stream bytes',
   } finally { s.server.stop(true); }
 });
 
-test("rule B4: an upstream 401 calls the connector's rejected once and fails the route", async () => {
+test("rule B4: an upstream 401 calls the connector's rejected once, with the target it built", async () => {
   const s = stub(() => new Response('{"error":{"message":"bad token"}}', { status: 401 }));
   try {
     const req = input(s.server.url.href);
-    let rejected = 0;
-    req.connector.rejected = () => { rejected += 1; };
+    const refused: UpstreamTarget[] = [];
+    req.connector.rejected = (_provider, target) => { refused.push(target); };
     expect(await attempt(req)).toEqual({
       kind: 'failed', outcome: { kind: 'route' }, status: 401, reason: 'bad token',
     });
-    expect(rejected).toBe(1);
+    // The connector is told which request was refused, so it can compare its token.
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.url).toBe(s.server.url.href);
+    expect(refused[0]?.headers.authorization).toBe('Bearer secret-key');
   } finally { s.server.stop(true); }
 });
 

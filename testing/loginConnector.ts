@@ -1,8 +1,8 @@
 // A connector that signs a provider in with a device code and renews its access token with a
 // rotating refresh token, built from the same helper and contract the three OAuth connectors
 // will use. It exists so the shared machinery is proven before any of them is written.
-import { UpstreamFailure } from '../connectors/connector';
-import type { Connector, LoginConnector, ProviderAccess } from '../connectors/connector';
+import { accessTokenOf, UpstreamFailure } from '../connectors/connector';
+import type { Connector, LoginConnector, ProviderAccess, UpstreamTarget } from '../connectors/connector';
 import { deviceCodeLogin } from '../connectors/deviceCode';
 import { due, LoginExpired } from '../connectors/tokens';
 import { isObject, parseJson, type JsonObject } from '../protocols/json';
@@ -123,10 +123,12 @@ export function fakeLoginConnector(options: FakeLoginOptions): FakeLogin {
     async models() {
       return [];
     },
-    rejected(provider) {
-      // One way a connector with a refresh token can act on a 401: let the next request renew.
+    rejected(provider, target) {
+      // One way a connector with a refresh token can act on a 401: let the next request renew —
+      // for the token the refused request carried, never for one already replaced.
       const credential = readCredential(provider.credential);
       if (credential === null) return;
+      if (accessTokenOf(target) !== credential.accessToken) return;
       provider.saveCredential(JSON.stringify({ ...credential, expiresAt: now().toISOString() }));
     },
   };

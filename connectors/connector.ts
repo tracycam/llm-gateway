@@ -14,7 +14,10 @@ export interface ProviderAccess {
   id: string;
   /** The address the administrator gave; null when the connector's default applies. */
   baseUrl: string | null;
-  /** The stored credential, a JSON text only the connector reads; null when there is none. */
+  /**
+   * The stored credential, a JSON text only the connector reads; null when there is none. It is
+   * read as stored now, every time: a renewal another request stored is visible here at once.
+   */
   credential: string | null;
   /** Replaces the stored credential, for example after a login token was renewed. */
   saveCredential(credential: string): void;
@@ -102,11 +105,13 @@ export interface ConnectorBase {
   /** The models the provider offers now. Rejects when the provider cannot be asked. */
   models(provider: ProviderAccess): Promise<ProviderModelInput[]>;
   /**
-   * The upstream refused the credential on a request (HTTP 401). What follows is the
-   * connector's choice: one without a refresh token marks the credential rejected; one with a
-   * refresh token lets the next request renew it.
+   * The upstream refused the credential on the request sent to `target` (HTTP 401). A connector
+   * acts only when that request carried the credential stored now; a 401 for a token another
+   * request has already replaced changes nothing. What follows is the connector's choice: one
+   * without a refresh token marks the credential rejected; one with a refresh token lets the
+   * next request renew it.
    */
-  rejected?(provider: ProviderAccess): void;
+  rejected?(provider: ProviderAccess, target: UpstreamTarget): void;
 }
 
 /** A connector whose provider the administrator gives an API key. */
@@ -140,6 +145,17 @@ export function protocolFor(
 ): Protocol {
   if (protocols === null || protocols.length === 0) return fallback;
   return protocols.includes(inbound) ? inbound : protocols[0];
+}
+
+/**
+ * The bearer token a target presents, or null when it presents none. `rejected` compares it with
+ * the credential stored now to tell a 401 for the current token from a late one.
+ */
+export function accessTokenOf(target: UpstreamTarget): string | null {
+  const authorization = Object.entries(target.headers)
+    .find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+  if (authorization === undefined) return null;
+  return /^Bearer\s+(\S+)$/i.exec(authorization)?.[1] ?? null;
 }
 
 /** A failure of the upstream that a connector reports in words fit to show. */

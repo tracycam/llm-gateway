@@ -102,7 +102,7 @@ function errorAnswer(
   input: AttemptInput, target: UpstreamTarget, response: Response, text: string,
 ): AttemptResult {
   const status = response.status;
-  if (status === 401) input.connector.rejected?.(input.provider);
+  if (status === 401) input.connector.rejected?.(input.provider, target);
   const outcome = classify(status, response.headers.get('retry-after'), input.now());
   const message = protocolModule(target.protocol).errorOf(parseJson(text)) ?? `HTTP ${status}`;
   if (outcome.kind === 'client') {

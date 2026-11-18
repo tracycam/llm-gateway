@@ -8,10 +8,11 @@ export const MODEL_TIMEOUT_MS = 30_000;
 
 /** Read and validate an API key without exposing credential text in errors. */
 export function optionalApiKey(provider: ProviderAccess): string | null {
-  if (provider.credential === null) {
+  const stored = provider.credential;
+  if (stored === null) {
     return null;
   }
-  const value = parseJson(provider.credential);
+  const value = parseJson(stored);
   if (!isObject(value) || typeof value.apiKey !== 'string' || !value.apiKey.trim()) {
     throw new UpstreamFailure('Invalid API key credential', null);
   }

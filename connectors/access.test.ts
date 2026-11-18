@@ -28,12 +28,15 @@ test('id and baseUrl are copied from the provider', () => {
   db.close();
 });
 
-test('credential is read when access is constructed', () => {
+test('rule A: credential is read as stored now, not copied when the access is built', () => {
   const { db, store, provider, renewals } = setup();
-  store.setCredential(provider.id, 'new');
-  const access = providerAccess(store, provider, renewals);
-  store.setCredential(provider.id, 'later');
-  expect(access.credential).toBe('new');
+  const one = providerAccess(store, provider, renewals);
+  const two = providerAccess(store, provider, renewals);
+  // A renewal stored through another access object is visible at once.
+  two.saveCredential('second');
+  expect(one.credential).toBe('second');
+  store.setCredential(provider.id, 'third');
+  expect(one.credential).toBe('third');
   db.close();
 });
 
