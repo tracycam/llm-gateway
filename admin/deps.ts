@@ -4,6 +4,7 @@ import type { CredentialRenewals } from '../connectors/tokens';
 import type { KeyStore } from '../keyStore';
 import type { LoginSessions } from '../login';
 import type { ModelStore } from '../modelStore';
+import type { ModelSync } from '../modelSync';
 import type { ProviderStore } from '../providerStore';
 import type { UsageStore } from '../usageStore';
 
@@ -15,6 +16,8 @@ export interface AdminDeps {
   usage: UsageStore;
   /** The gateway's one login registry. */
   logins: LoginSessions;
+  /** The gateway's one model sync: it fetches, stores and auto-publishes a provider's models. */
+  sync: ModelSync;
   /** The gateway's one renewal registry. */
   renewals: CredentialRenewals;
   connector(id: string): Connector | null;

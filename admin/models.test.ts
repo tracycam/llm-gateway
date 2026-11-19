@@ -2,6 +2,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { ModelStore } from '../modelStore';
+import { ModelSync } from '../modelSync';
 import { KeyStore } from '../keyStore';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
@@ -17,15 +18,22 @@ test('models and routes validate inputs and persist changes', async () => {
   migrate(db);
   const providers = new ProviderStore(db);
   const now = () => new Date('2026-01-01T00:00:00Z');
+  const models = new ModelStore(db);
+  const renewals = new CredentialRenewals();
+  const sync = new ModelSync({
+    providers, models, renewals, connector: () => null, now,
+    wait: () => new Promise<void>(() => {}),
+  });
   const deps: AdminDeps = {
     providers,
-    models: new ModelStore(db),
+    models,
     keys: new KeyStore(db),
     usage: new UsageStore(db),
     logins: new LoginSessions({
       providers, connector: () => null, fetch, now, wait: () => new Promise<void>(() => {}),
     }),
-    renewals: new CredentialRenewals(),
+    sync,
+    renewals,
     connector: () => null,
     connectors: () => [],
     now,

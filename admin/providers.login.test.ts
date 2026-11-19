@@ -6,6 +6,7 @@ import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore } from '../keyStore';
 import { LoginSessions } from '../login';
 import { ModelStore } from '../modelStore';
+import { ModelSync } from '../modelSync';
 import { ProviderStore, type ProviderRecord } from '../providerStore';
 import { migrate } from '../schema';
 import { AuthorizationServer } from '../testing/authorizationServer';
@@ -60,17 +61,25 @@ function setup(): Fixture {
   }).connector;
   const connectors = [loginConnector, brokenConnector, keyConnector];
   const find = (id: string) => connectors.find((connector) => connector.id === id) ?? null;
+  const models = new ModelStore(db);
+  const renewals = new CredentialRenewals();
+  const sync = new ModelSync({
+    providers, models, renewals, connector: find, now: () => NOW,
+    wait: () => new Promise<void>(() => {}),
+  });
   const logins = new LoginSessions({
     providers, connector: find, fetch, now: () => NOW, wait: () => new Promise<void>(() => {}),
+    onGranted: (providerId) => sync.trigger(providerId),
   });
   sessions.push(logins);
   const deps: AdminDeps = {
     providers,
-    models: new ModelStore(db),
+    models,
     keys: new KeyStore(db),
     usage: new UsageStore(db),
     logins,
-    renewals: new CredentialRenewals(),
+    sync,
+    renewals,
     connector: find,
     connectors: () => connectors,
     now: () => NOW,

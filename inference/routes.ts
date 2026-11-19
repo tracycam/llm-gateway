@@ -18,7 +18,7 @@ export interface UsableRoute {
  * refused, and a provider the gateway signs in has a credential. Requests sent to such a
  * provider would fail and cost a round trip, so the model fails over instead.
  */
-function credentialUsable(provider: ProviderRecord, connector: Connector): boolean {
+export function credentialUsable(provider: ProviderRecord, connector: Connector): boolean {
   if (provider.credentialRejected) return false;
   return connector.credential !== 'login' || provider.hasCredential;
 }

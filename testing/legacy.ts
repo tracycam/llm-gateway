@@ -84,7 +84,7 @@ export function openVersion3Database(): Database {
 }
 
 /**
- * An empty in-memory version-4 database. Versions 5 to 7 change rows or add columns only, so the
+ * An empty in-memory version-4 database. Versions 5 to 9 change rows or add columns only, so the
  * migration is run to build the rest of the schema, then the later columns are dropped and the
  * version is set back to 4.
  */
@@ -92,6 +92,8 @@ export function openVersion4Database(): Database {
   const db = openVersion3Database();
   migrate(db);
   db.exec(`ALTER TABLE providers DROP COLUMN credential_rejected;
+    ALTER TABLE providers DROP COLUMN models_refreshed_at;
+    ALTER TABLE providers DROP COLUMN models_error;
     ALTER TABLE provider_models DROP COLUMN protocols;
     PRAGMA user_version = 4;`);
   return db;
@@ -123,6 +125,13 @@ export function openVersion7Database(): Database {
   const db = openVersion6Database();
   db.exec(`ALTER TABLE provider_models ADD COLUMN protocols TEXT;
     PRAGMA user_version = 7`);
+  return db;
+}
+
+/** An empty in-memory version-8 database: version 8 changes rows only, not the schema. */
+export function openVersion8Database(): Database {
+  const db = openVersion7Database();
+  db.exec('PRAGMA user_version = 8');
   return db;
 }
 

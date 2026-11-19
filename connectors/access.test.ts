@@ -9,7 +9,7 @@ function setup() {
   const db = new Database(':memory:');
   db.run(`CREATE TABLE providers (id TEXT, name TEXT, connector TEXT, base_url TEXT, credential TEXT,
     auto_publish INTEGER, enabled INTEGER DEFAULT 1, credential_rejected INTEGER DEFAULT 0,
-    created_at TEXT)`);
+    models_refreshed_at TEXT, models_error TEXT, created_at TEXT)`);
   db.run(`CREATE TABLE provider_models (provider_id TEXT, upstream_id TEXT, context_length INTEGER,
     max_output_tokens INTEGER, input_price REAL, output_price REAL, cache_read_price REAL,
     protocols TEXT, fetched_at TEXT)`);

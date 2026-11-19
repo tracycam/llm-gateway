@@ -166,7 +166,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 8) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 9) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -301,6 +301,18 @@ export function migrate(db: Database): void {
           base_url = COALESCE(base_url, 'https://api.x.ai/v1')
           WHERE connector = 'xai';
         PRAGMA user_version = 8;
+      `);
+    })();
+  }
+
+  // Version 9 records how the last automatic model list sync went: when it last succeeded and,
+  // when it failed, why. Existing providers have never synced by themselves.
+  if (version < 9) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE providers ADD COLUMN models_refreshed_at TEXT;
+        ALTER TABLE providers ADD COLUMN models_error TEXT;
+        PRAGMA user_version = 9;
       `);
     })();
   }

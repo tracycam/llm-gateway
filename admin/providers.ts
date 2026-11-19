@@ -12,11 +12,10 @@ import type {
   PublishBody,
   RouteResponse,
 } from '../../protocol/gatewayApi';
-import { providerAccess } from '../connectors/access';
 import { UpstreamFailure } from '../connectors/connector';
 import { errorResponse, jsonResponse } from '../http';
 import { LoginFailure } from '../login';
-import type { ProviderModelInput, ProviderRecord } from '../providerStore';
+import type { ProviderRecord } from '../providerStore';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';
 import { boolean, InputError, optionalString, readBody, string } from './input';
@@ -58,7 +57,7 @@ async function create(req: Request, deps: AdminDeps): Promise<Response> {
   const connectorId = string(body.connector, 'connector');
   const url = body.baseUrl === undefined ? null : baseUrl(body.baseUrl);
   const apiKey = optionalString(body.apiKey, 'apiKey');
-  const autoPublish = boolean(body.autoPublish, 'autoPublish') ?? false;
+  const autoPublish = boolean(body.autoPublish, 'autoPublish') ?? true;
   const connector = deps.connector(connectorId);
   if (!connector) throw new InputError('connector 无效');
   if (connector.defaultBaseUrl === null && url === null) throw new InputError('baseUrl 无效');
@@ -71,6 +70,8 @@ async function create(req: Request, deps: AdminDeps): Promise<Response> {
     credential: apiKey === undefined ? null : JSON.stringify({ apiKey }),
     autoPublish,
   }, deps.now());
+  // The response does not wait for the new provider's models; the sync records how it went.
+  deps.sync.trigger(provider.id);
   return jsonResponse({ provider } satisfies ProviderResponse, 201);
 }
 
@@ -91,11 +92,20 @@ async function update(req: Request, deps: AdminDeps, [id]: string[]): Promise<Re
   if (apiKey === null && connector.credential === 'api-key') throw new InputError('apiKey 无效');
   if (apiKey !== undefined && connector.credential === 'login') throw new InputError('apiKey 无效');
   deps.providers.update(id, patch);
-  if (apiKey !== undefined) {
-    deps.providers.setCredential(id, apiKey === null ? null : JSON.stringify({ apiKey }));
-  }
+  const credentialBefore = deps.providers.credential(id);
+  const credentialAfter = apiKey === undefined
+    ? credentialBefore
+    : (apiKey === null ? null : JSON.stringify({ apiKey }));
+  if (apiKey !== undefined) deps.providers.setCredential(id, credentialAfter);
   const provider = deps.providers.get(id);
   if (!provider) throw new InputError('未找到提供商', 404);
+  // A new key, a new address or a provider switched back on reaches the same upstream
+  // differently; the sync runs in the background and the response does not wait for it.
+  const keyChanged = apiKey !== undefined
+    && (credentialAfter !== credentialBefore || before.credentialRejected);
+  const addressChanged = patch.baseUrl !== undefined && patch.baseUrl !== before.baseUrl;
+  const enabledNow = patch.enabled === true && !before.enabled;
+  if (keyChanged || addressChanged || enabledNow) deps.sync.trigger(id);
   return jsonResponse({ provider } satisfies ProviderResponse);
 }
 
@@ -103,19 +113,12 @@ async function refresh(_req: Request, deps: AdminDeps, [id]: string[]): Promise<
   const provider = existing(deps, id);
   const connector = deps.connector(provider.connector);
   if (!connector) throw new InputError('connector 无效');
-  const access = providerAccess(deps.providers, provider, deps.renewals);
-  let models: ProviderModelInput[];
-  try {
-    models = await connector.models(access);
-  } catch (error) {
-    if (error instanceof UpstreamFailure) return errorResponse(error.message, 502);
-    throw error;
-  }
-  deps.providers.replaceModels(id, models, deps.now());
-  if (provider.autoPublish) {
-    for (const model of discovered(deps, id)) {
-      if (!model.published) deps.models.publish(id, model.upstreamId, deps.now());
+  const outcome = await deps.sync.refresh(id);
+  if (!outcome.ok) {
+    if (outcome.error instanceof UpstreamFailure) {
+      return errorResponse(outcome.error.message, 502);
     }
+    throw outcome.error;
   }
   return jsonResponse({ models: discovered(deps, id) } satisfies ProviderModelsResponse);
 }

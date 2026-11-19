@@ -19,6 +19,8 @@ import { handleModel, handleModelList, type ModelListDeps } from './inference/mo
 import { KeyStore } from './keyStore';
 import { LoginSessions } from './login';
 import { ModelStore } from './modelStore';
+import { ModelSync } from './modelSync';
+import type { SyncWait } from './modelSync';
 import { openNodeEvents } from './nodeEvents';
 import { handleNodeRoute, NODES_PATH } from './nodeRoutes';
 import { NodeStore } from './nodeStore';
@@ -60,6 +62,8 @@ export interface GatewayAppOptions {
   adminToken: string | undefined;
   /** Timeouts for the connections to registered daemons. */
   nodeTiming?: Pick<NodeLinkOptions, 'watchdogMs' | 'handshakeTimeoutMs' | 'retryMinMs' | 'retryMaxMs'>;
+  /** The wait before each periodic model sync; defaults to a timer. Tests inject one. */
+  syncWait?: SyncWait;
 }
 
 /** A gateway that can answer requests without a network listener. */
@@ -152,13 +156,22 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
   const router = new Router();
   const admission = new Admission();
   const renewals = new CredentialRenewals();
+  const sync = new ModelSync({
+    providers, models, renewals, connector: options.connector, now: options.now,
+    wait: options.syncWait,
+  });
   const logins = new LoginSessions({
     providers, connector: options.connector, fetch: options.fetch, now: options.now,
+    onGranted: (providerId) => sync.trigger(providerId),
   });
   let closed = false;
 
+  // Every provider that can be asked is synced now, and again every six hours, without the
+  // console: its models and auto-published routes stay current while the gateway runs.
+  sync.start();
+
   const admin: AdminDeps = {
-    providers, models, keys, usage, logins, renewals,
+    providers, models, keys, usage, logins, sync, renewals,
     connector: options.connector,
     connectors: options.connectors,
     now: options.now,
@@ -215,6 +228,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
       if (closed) return;
       closed = true;
       logins.close();
+      sync.close();
       await cluster.close();
       options.db.close();
     },

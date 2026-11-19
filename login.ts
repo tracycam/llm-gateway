@@ -42,6 +42,11 @@ export interface LoginDeps {
   now(): Date;
   /** Resolves after `ms`, or rejects when `signal` aborts. Defaults to a timer. */
   wait?: LoginWait;
+  /**
+   * Called after a login stored its credential, before the session reports `done`: the
+   * gateway's model sync starts from here so a signed-in provider's models appear by themselves.
+   */
+  onGranted?(providerId: string): void;
 }
 
 /** Tells a session to wait `ms`, and rejects when `signal` aborts. */
@@ -203,6 +208,7 @@ export class LoginSessions {
           return;
         }
         this.deps.providers.setCredential(providerId, polled.credential);
+        this.deps.onGranted?.(providerId);
         this.settle(providerId, running, { state: 'done' });
         return;
       }

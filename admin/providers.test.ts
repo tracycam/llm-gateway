@@ -9,6 +9,7 @@ import { CredentialRenewals } from '../connectors/tokens';
 import { KeyStore } from '../keyStore';
 import { LoginSessions } from '../login';
 import { ModelStore } from '../modelStore';
+import { ModelSync } from '../modelSync';
 import { ProviderStore } from '../providerStore';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
@@ -38,17 +39,24 @@ test('credentials, refresh failure, publication and input validation', async () 
     },
   };
   const providers = new ProviderStore(db);
+  const models = new ModelStore(db);
+  const renewals = new CredentialRenewals();
   const find = (id: string) => id === connector.id ? connector : null;
   const now = () => new Date('2026-01-01T00:00:00Z');
+  const sync = new ModelSync({
+    providers, models, renewals, connector: find, now,
+    wait: () => new Promise<void>(() => {}),
+  });
   const deps: AdminDeps = {
     providers,
-    models: new ModelStore(db),
+    models,
     keys: new KeyStore(db),
     usage: new UsageStore(db),
     logins: new LoginSessions({
       providers, connector: find, fetch, now, wait: () => new Promise<void>(() => {}),
     }),
-    renewals: new CredentialRenewals(),
+    sync,
+    renewals,
     connector: find,
     connectors: () => [connector],
     now,

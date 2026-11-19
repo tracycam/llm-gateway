@@ -31,6 +31,8 @@ interface ProviderRow {
   auto_publish: number;
   has_credential: number;
   credential_rejected: number;
+  models_refreshed_at: string | null;
+  models_error: string | null;
   created_at: string;
 }
 interface ProviderModelRow {
@@ -64,7 +66,8 @@ function storedProtocols(
 }
 
 const selectProvider = `SELECT id, name, connector, base_url, enabled, auto_publish,
-  credential IS NOT NULL AS has_credential, credential_rejected, created_at FROM providers`;
+  credential IS NOT NULL AS has_credential, credential_rejected, models_refreshed_at,
+  models_error, created_at FROM providers`;
 
 function mapProvider(row: ProviderRow): ProviderRecord {
   return {
@@ -76,6 +79,8 @@ function mapProvider(row: ProviderRow): ProviderRecord {
     autoPublish: row.auto_publish !== 0,
     hasCredential: row.has_credential !== 0,
     credentialRejected: row.credential_rejected !== 0,
+    modelsRefreshedAt: row.models_refreshed_at,
+    modelsError: row.models_error,
     createdAt: row.created_at,
   };
 }
@@ -140,6 +145,25 @@ export class ProviderStore {
 
   delete(id: string): boolean {
     return this.db.query('DELETE FROM providers WHERE id = ?').run(id).changes > 0;
+  }
+
+  /**
+   * Record that this provider just listed its models: the time, and that no failure stands.
+   * Returns false for an unknown provider, which stores nothing.
+   */
+  recordModelsSynced(id: string, now: Date): boolean {
+    return this.db.query(
+      'UPDATE providers SET models_refreshed_at = ?, models_error = NULL WHERE id = ?'
+    ).run(now.toISOString(), id).changes > 0;
+  }
+
+  /**
+   * Record why this provider could not list its models. The last success time stays. Returns
+   * false for an unknown provider, which stores nothing.
+   */
+  recordModelsError(id: string, message: string): boolean {
+    return this.db.query('UPDATE providers SET models_error = ? WHERE id = ?')
+      .run(message, id).changes > 0;
   }
 
   replaceModels(id: string, models: ProviderModelInput[], now: Date): void {
