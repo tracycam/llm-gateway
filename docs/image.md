@@ -1,20 +1,18 @@
-# gateway 镜像
+# 镜像与管理接口
 
-镜像里只有 gateway：打包成一个文件的服务端，加上构建好的控制台。不含 daemon——daemon 要加速卡和驱动，装在有卡的机器上。gateway 不需要 daemon 就能启动：provider、模型与密钥、`/v1` 都由它自己持有。
-
-`gateway/` 是自足的一层：它自己 `bun install`、`bun run check`、`bun test`、`bun run build`，镜像也从这一层构建，不读仓库里别的东西。
+镜像里只有网关：打包成一个文件的服务端，加上构建好的控制台。它不需要 AI-Hub daemon 就能启动：provider、模型与密钥、`/v1` 都由它自己持有；AI-Hub daemon 只是一种 provider（`aihub`）。
 
 ## 构建
 
+发布的镜像在 `ghcr.io/tracycam/llm-gateway`（amd64、arm64），由打 tag 时的 Release 工作流构建。自己构建：
+
 ```
-docker build -t llm-gateway gateway    # 构建上下文就是 gateway/
-scripts/build-gateway-image.sh         # 同上，另按提交号打标签
-scripts/verify-gateway-image.sh        # 15 项检查，任何一项没跑到或没通过即失败
+docker build -t llm-gateway .     # 在本仓库根目录
 ```
 
-基础镜像按版本和摘要固定在 `gateway/Dockerfile` 里。拉不到它的机器上，先用别的办法把同一个镜像放进本地，再用 `AIHUB_BUN_IMAGE=oven/bun:1.4.2-slim` 指向本地那份。
+基础镜像按版本和多架构摘要固定在 `Dockerfile` 里。拉不到它的机器上，先用别的办法把同一个镜像放进本地，再用 `--build-arg BUN_IMAGE=oven/bun:1.4.2-slim` 指向本地那份。
 
-`verify-gateway-image.sh` 不连任何 daemon，也不连外网：它自己在一个空闲端口上起一个桩上游（`scripts/stub-upstream.ts`，OpenAI 兼容，`/v1/models` 与 `/v1/chat/completions`），绑在 docker 桥地址上，用一次性令牌、卷和目录跑完 15 项检查，结束时只删自己建的东西。
+在 AI-Hub 仓库里，`scripts/build-gateway-image.sh` 按提交号打标签构建，`scripts/verify-gateway-image.sh` 对镜像跑 15 项检查（自起一个 OpenAI 兼容的桩上游，不连 daemon、不连外网）。
 
 ## 运行
 
@@ -39,7 +37,7 @@ docker run -d --name llm-gateway \
 - 令牌用 `-e ADMIN_TOKEN`（不写 `=值`）从环境里带进去，这样它不出现在 `docker` 的命令行里。
 - `/healthz` 不需要令牌；`/api/gateway/*` 和 `/v1/*` 需要（`/v1/*` 用 API key，不用管理员令牌）。
 - 容器内以 uid 1000 运行，`/data` 是 0700、`gateway.sqlite` 是 0600。`/data` 用宿主机目录而不是卷时，那个目录要对 uid 1000 可写。
-- 换一台机器：`docker save llm-gateway | gzip > llm-gateway.tar.gz`，拷过去 `docker load`。没有推送到任何仓库。
+- 换一台没有网络的机器：`docker save llm-gateway | gzip > llm-gateway.tar.gz`，拷过去 `docker load`。
 
 ## 启动之后
 
@@ -162,17 +160,15 @@ curl -s "$G/api/gateway/usage?by=provider&model=<modelId>" -H "Authorization: Be
 
 ## 现在的限制
 
-- 管理界面还不能用：控制台的网关页仍在调已删掉的 `/api/gateway/state`、`/api/gateway/config`（代码：`web/src/gateway/GatewayApp.tsx`），配置只能走上面的接口，直到 `TODO.md` `S7.9`。
-- 连 daemon 只通过 `aihub` provider：`baseUrl` 是 daemon 地址，`apiKey` 是它的管理令牌，worker 令牌由服务端自己算。原来的机器管理接口（`/api/gateway/nodes*`、`/api/gateway/events`）已移除；一条 daemon 连线离线时，原因记在它 provider 的 `modelsError` 里。
-- 真实上游只测过 OpenCode Zen 与 Go（实测记录在 `docs/connectors.md` 第 9 节）；OpenAI、Anthropic、OpenRouter、xAI 没连过。按登录流程取凭证的 connector（GitHub Copilot、ChatGPT 订阅）还没有。
+- 连 AI-Hub daemon 只通过 `aihub` provider：`baseUrl` 是 daemon 地址，`apiKey` 是它的管理令牌，worker 令牌由网关自己算。一条 daemon 连线离线时，原因记在它 provider 的 `modelsError` 里。
+- 真实上游只测过 OpenCode Zen 与 Go（实测记录在 `docs/connectors.md` 第 9 节）和 AI-Hub；OpenAI、Anthropic、OpenRouter 只对模拟上游测过；GitHub Copilot 与 Grok 的登录只对模拟授权服务器测过；ChatGPT 订阅还没有连接器。
 - 不做 TLS。要加密就在前面放反向代理。
 
 ## 实测（2026-11-18，开发机，x86-64，Docker 27.3.1）
 
 - 镜像 171 MB，其中基础镜像 170 MB，自己的内容约 1.0 MB（服务端 155 kB，控制台 817 kB）。
-- `scripts/verify-gateway-image.sh` 15/15 通过、退出码 0，连续两遍。桩上游在 docker 桥地址上，容器外。
-- 把镜像或脚本改坏 6 种，每种都被对应的检查拦下：不给令牌也启动（检查 2）、数据库 0644（3）、匿名 `/v1/models` 回 200（6）、用量不记账（10）、镜像里多一个 `.ts`（13）、桩上游的模型名对不上（5）。
-- connector 列表与上面的接口形状取自这次运行；`docker stop` 后退出码 0，`/data` 与 `gateway.sqlite` 的权限实测 0700 / 0600。
-- OpenCode connector 的 user agent 带版本：镜像的 bundle 里内联了 `gateway/package.json` 的版本（`1.0.0`）。
+- 镜像检查 15/15 通过、退出码 0，连续两遍。桩上游在 docker 桥地址上，容器外。
+- 把镜像或脚本改坏 6 种，每种都被对应的检查拦下：不给令牌也启动、数据库 0644、匿名 `/v1/models` 回 200、用量不记账、镜像里多一个 `.ts`、桩上游的模型名对不上。
+- `docker stop` 后退出码 0，`/data` 与 `gateway.sqlite` 的权限实测 0700 / 0600。
 
-待测：arm64；镜像对真实 OpenAI / Anthropic / OpenRouter / xAI 的请求；不设 `AIHUB_BUN_IMAGE`、由 `docker` 自己拉取固定摘要的基础镜像来构建。
+待测：镜像对真实 OpenAI / Anthropic / OpenRouter 的请求。arm64 镜像由 Release 工作流构建。
