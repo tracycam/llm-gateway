@@ -213,8 +213,10 @@ const CHAT_CLIENT_PATH: Record<string, string> = {
   'opencode-go': '/openai/v1/chat/completions',
 };
 
-// The API-key connectors; a login connector's target needs a signed-in credential.
-const KEY_CONNECTORS = CONNECTORS.filter((connector) => connector.credential !== 'login');
+// The API-key connectors with a static address; the AI-Hub connector's target comes from a
+// live daemon and is covered by its own tests.
+const KEY_CONNECTORS = CONNECTORS.filter((connector) =>
+  connector.credential !== 'login' && connector.id !== 'aihub');
 
 for (const connector of KEY_CONNECTORS) {
   test(`${connector.id} target uses the overridden URL`, async () => {

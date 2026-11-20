@@ -3,10 +3,11 @@
 // headers and in which protocol, and which models the provider offers. It does not parse
 // streams, count usage or choose routes.
 import type { Protocol } from '../protocols/protocol';
-import type { CredentialKind } from '../../protocol/gatewayApi';
+import type { CredentialKind } from '../shared/api';
 import type { ProviderModelInput } from '../providerStore';
+import type { Outcome } from '../router';
 
-// `CredentialKind` crosses the management API; protocol/gatewayApi.ts defines it once.
+// `CredentialKind` crosses the management API; shared/api.ts defines it once.
 export type { CredentialKind };
 
 /** A provider as its connector sees it. */
@@ -83,6 +84,31 @@ export interface UpstreamTarget {
   protocol: Protocol;
 }
 
+/**
+ * A place on one upstream endpoint, for a connector that limits each endpoint's concurrency
+ * itself (one daemon worker, for example). The request must not be sent until this is granted,
+ * and the place is released only when the response is over: a stream holds it to its last byte.
+ */
+export interface UpstreamLease {
+  target: UpstreamTarget;
+  /** Identifies this endpoint, so a retry can leave the failed one out. */
+  key: string;
+  /** Gives the place back; idempotent, and wakes whatever waits for one. */
+  release(): void;
+  /** Whether another endpoint for this model may be tried, besides those in `exclude`. */
+  hasMore(exclude: ReadonlySet<string>): boolean;
+  /** This endpoint failed before the first content frame: cool it down. */
+  fail(outcome: Outcome, now: number): void;
+}
+
+/** The answer of asking a connector for one endpoint's place. */
+export type LeaseResult =
+  | { kind: 'lease'; lease: UpstreamLease }
+  /** No endpoint can serve this model now: a stopped service or an offline daemon. */
+  | { kind: 'unavailable' }
+  /** The client left while waiting for a place. */
+  | { kind: 'abandoned' };
+
 /** What every connector does, whatever its credential kind. */
 export interface ConnectorBase {
   /** Stored with the provider; never changes once released. */
@@ -104,6 +130,26 @@ export interface ConnectorBase {
   target(provider: ProviderAccess, upstreamModel: string, inbound: Protocol): Promise<UpstreamTarget>;
   /** The models the provider offers now. Rejects when the provider cannot be asked. */
   models(provider: ProviderAccess): Promise<ProviderModelInput[]>;
+  /**
+   * Whether this route can serve `upstreamModel` now. A connector whose upstream is a live
+   * daemon answers false when its service is stopped or the daemon is offline, which takes the
+   * route out of `/v1/models` and routing without deleting it.
+   */
+  routeAvailable?(providerId: string, upstreamModel: string): boolean;
+  /** The most requests this route takes at once; null = no cap. */
+  routeLimit?(providerId: string, upstreamModel: string): number | null;
+  /**
+   * Takes a place on one endpoint before a request is sent, waiting while every endpoint is at
+   * its own concurrency. `exclude` leaves out endpoints this request already failed on, so a
+   * retry goes to another replica of the same daemon.
+   */
+  acquire?(
+    providerId: string,
+    upstreamModel: string,
+    inbound: Protocol,
+    exclude: ReadonlySet<string>,
+    signal: AbortSignal,
+  ): Promise<LeaseResult>;
   /**
    * The upstream refused the credential on the request sent to `target` (HTTP 401). A connector
    * acts only when that request carried the credential stored now; a 401 for a token another

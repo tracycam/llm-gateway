@@ -11,7 +11,7 @@ import type {
   ProvidersResponse,
   PublishBody,
   RouteResponse,
-} from '../../protocol/gatewayApi';
+} from '../shared/api';
 import { UpstreamFailure } from '../connectors/connector';
 import { errorResponse, jsonResponse } from '../http';
 import { LoginFailure } from '../login';
@@ -70,6 +70,8 @@ async function create(req: Request, deps: AdminDeps): Promise<Response> {
     credential: apiKey === undefined ? null : JSON.stringify({ apiKey }),
     autoPublish,
   }, deps.now());
+  // A connector with live state starts following the provider before its first model sync.
+  deps.onProviderChanged?.(provider.id);
   // The response does not wait for the new provider's models; the sync records how it went.
   deps.sync.trigger(provider.id);
   return jsonResponse({ provider } satisfies ProviderResponse, 201);
@@ -99,6 +101,7 @@ async function update(req: Request, deps: AdminDeps, [id]: string[]): Promise<Re
   if (apiKey !== undefined) deps.providers.setCredential(id, credentialAfter);
   const provider = deps.providers.get(id);
   if (!provider) throw new InputError('未找到提供商', 404);
+  deps.onProviderChanged?.(id);
   // A new key, a new address or a provider switched back on reaches the same upstream
   // differently; the sync runs in the background and the response does not wait for it.
   const keyChanged = apiKey !== undefined
@@ -147,6 +150,7 @@ function list(_req: Request, deps: AdminDeps): Response {
 
 function remove(_req: Request, deps: AdminDeps, [id]: string[]): Response {
   if (!deps.providers.delete(id)) throw new InputError('未找到提供商', 404);
+  deps.onProviderChanged?.(id);
   return new Response(null, { status: 204 });
 }
 

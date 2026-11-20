@@ -5,7 +5,7 @@ import type {
   KeyPatchBody,
   KeyResponse,
   KeysResponse,
-} from '../../protocol/gatewayApi';
+} from '../shared/api';
 import { jsonResponse } from '../http';
 import type { ResetPeriod } from '../period';
 import type { JsonObject } from '../protocols/json';

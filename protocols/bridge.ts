@@ -6,6 +6,16 @@ import { protocolModule, type FrameKind, type Protocol, type StreamObserver } fr
 import { SseParser, type SseFrame } from './sse';
 import { toChatRequest, toMessagesResponse, MessagesStreamWriter } from './messagesClientOverChat';
 import { toMessagesRequest, toChatResponse, ChatStreamWriter } from './chatClientOverMessages';
+import {
+  toResponsesRequest,
+  toChatResponseFromResponses,
+  ChatFromResponsesStreamWriter,
+} from './chatClientOverResponses';
+import {
+  toChatRequestFromResponses,
+  toResponsesResponseFromChat,
+  ResponsesFromChatStreamWriter,
+} from './responsesClientOverChat';
 
 /** Protocols and fixed values for one request. */
 export interface Bridge {
@@ -32,9 +42,21 @@ export interface BridgedRequest {
 }
 
 function translateRequest(body: JsonObject, bridge: Bridge): { body: JsonObject } | Refused {
-  if (bridge.inbound === bridge.upstream) return { body: { ...body } };
-  if (bridge.inbound === 'chat') return toMessagesRequest(body, bridge.maxOutputTokens);
-  return toChatRequest(body);
+  const { inbound, upstream } = bridge;
+  if (inbound === upstream) return { body: { ...body } };
+  if (inbound === 'chat') {
+    return upstream === 'messages' ? toMessagesRequest(body, bridge.maxOutputTokens) : toResponsesRequest(body);
+  }
+  if (inbound === 'messages') {
+    if (upstream === 'chat') return toChatRequest(body);
+    // Messages → Chat → Responses: the Chat form is the hub the two translations share.
+    const chat = toChatRequest(body);
+    return isRefused(chat) ? chat : toResponsesRequest(chat.body);
+  }
+  if (upstream === 'chat') return toChatRequestFromResponses(body);
+  // Responses → Chat → Messages.
+  const chat = toChatRequestFromResponses(body);
+  return isRefused(chat) ? chat : toMessagesRequest(chat.body, bridge.maxOutputTokens);
 }
 
 /** Translate a request and select the upstream model. */
@@ -72,6 +94,20 @@ function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function translateResponse(body: JsonObject, bridge: Bridge): JsonObject {
+  const { inbound, upstream } = bridge;
+  if (inbound === 'chat') {
+    return upstream === 'messages' ? toChatResponse(body, bridge.created)
+      : toChatResponseFromResponses(body, bridge.created);
+  }
+  if (inbound === 'messages') {
+    return upstream === 'chat' ? toMessagesResponse(body)
+      : toMessagesResponse(toChatResponseFromResponses(body, bridge.created));
+  }
+  return upstream === 'chat' ? toResponsesResponseFromChat(body, bridge.created)
+    : toResponsesResponseFromChat(toChatResponse(body, bridge.created), bridge.created);
+}
+
 /** Translate a complete successful HTTP response. */
 export function bridgeResponse(text: string, bridge: Bridge): Complete {
   const body = parseJson(text);
@@ -82,9 +118,7 @@ export function bridgeResponse(text: string, bridge: Bridge): Complete {
   const usage = protocol.usageOf(body);
   if (bridge.inbound === bridge.upstream) return { ok: true, body: text, usage };
   try {
-    const translated = bridge.inbound === 'chat'
-      ? toChatResponse(body, bridge.created) : toMessagesResponse(body);
-    return { ok: true, body: JSON.stringify(translated), usage };
+    return { ok: true, body: JSON.stringify(translateResponse(body, bridge)), usage };
   } catch (error) {
     return { ok: false, reason: reasonOf(error) };
   }
@@ -115,15 +149,62 @@ export type Opened =
     reason: string;
   };
 
-function streamWriter(
-  bridge: Bridge,
-  clientWantsUsage: boolean,
-): MessagesStreamWriter | ChatStreamWriter | null {
-  if (bridge.inbound === bridge.upstream) return null;
-  if (bridge.inbound === 'chat') {
-    return new ChatStreamWriter({ created: bridge.created, includeUsage: clientWantsUsage });
+/** A stream translator: what a client should receive for one upstream frame. */
+export interface StreamWriter {
+  push(frame: { event: string | null; data: string | null }): string[];
+  end(): string[];
+}
+
+/** Runs a two-hop translation: the Chat SSE the first writer emits feeds the second writer. */
+class ChainedStreamWriter implements StreamWriter {
+  private readonly parser = new SseParser();
+
+  constructor(private readonly first: StreamWriter, private readonly second: StreamWriter) {}
+
+  public push(frame: { event: string | null; data: string | null }): string[] {
+    return this.drain(this.first.push(frame));
   }
-  return new MessagesStreamWriter();
+
+  public end(): string[] {
+    const out = this.drain(this.first.end());
+    out.push(...this.drainFrames(this.parser.end()));
+    out.push(...this.second.end());
+    return out;
+  }
+
+  private drain(frames: string[]): string[] {
+    const out: string[] = [];
+    for (const frame of frames) out.push(...this.drainFrames(this.parser.push(frame)));
+    return out;
+  }
+
+  private drainFrames(frames: SseFrame[]): string[] {
+    return frames.flatMap((frame) => this.second.push(frame));
+  }
+}
+
+function streamWriter(bridge: Bridge, clientWantsUsage: boolean): StreamWriter | null {
+  const { inbound, upstream } = bridge;
+  if (inbound === upstream) return null;
+  if (inbound === 'chat') {
+    return upstream === 'messages'
+      ? new ChatStreamWriter({ created: bridge.created, includeUsage: clientWantsUsage })
+      : new ChatFromResponsesStreamWriter({ created: bridge.created, includeUsage: clientWantsUsage });
+  }
+  if (inbound === 'messages') {
+    // Messages → Responses goes through Chat; the Chat hop always reports usage so the
+    // Messages hop can put it in `message_delta`.
+    return upstream === 'chat' ? new MessagesStreamWriter()
+      : new ChainedStreamWriter(
+        new ChatFromResponsesStreamWriter({ created: bridge.created, includeUsage: true }),
+        new MessagesStreamWriter(),
+      );
+  }
+  return upstream === 'chat' ? new ResponsesFromChatStreamWriter({ created: bridge.created })
+    : new ChainedStreamWriter(
+      new ChatStreamWriter({ created: bridge.created, includeUsage: true }),
+      new ResponsesFromChatStreamWriter({ created: bridge.created }),
+    );
 }
 
 /** Format a gateway-generated streaming error in the client's protocol. */
@@ -147,7 +228,7 @@ class StreamBridge {
   /** Classifies upstream frames and records usage. */
   private readonly observer: StreamObserver;
   /** Translates frames when protocols differ. */
-  private readonly writer: MessagesStreamWriter | ChatStreamWriter | null;
+  private readonly writer: StreamWriter | null;
   /** Parsed frames not yet looked at. */
   private frames: SseFrame[] = [];
   /** Text owed to the client. */

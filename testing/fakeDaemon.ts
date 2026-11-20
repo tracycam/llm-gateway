@@ -1,21 +1,8 @@
 // A daemon as the gateway sees it: the node identity route and an event stream the test drives.
-import { HubSnapshot, HubSseEvent, NodeIdentity } from '../../protocol/types';
+import { type DaemonEvent, type DaemonSnapshot, type NodeIdentity } from '../connectors/dgp';
 
-export function emptySnapshot(patch: Partial<HubSnapshot> = {}): HubSnapshot {
-  return {
-    cards: [],
-    services: [],
-    models: [],
-    engines: [],
-    apps: [],
-    storeApps: [],
-    hardware: { probeError: null } as unknown as HubSnapshot['hardware'],
-    settings: {} as unknown as HubSnapshot['settings'],
-    operations: [],
-    engineLogs: {},
-    appLogs: {},
-    ...patch,
-  };
+export function emptySnapshot(patch: Partial<DaemonSnapshot> = {}): DaemonSnapshot {
+  return { services: [], ...patch };
 }
 
 interface Stream {
@@ -32,7 +19,7 @@ export class FakeDaemon {
   /** HTTP status forced on both routes, when set. */
   public failWith: number | null = null;
   /** First event of every new stream; null opens the stream and sends nothing. */
-  public opening: HubSseEvent | null = { type: 'snapshot', data: emptySnapshot() };
+  public opening: DaemonEvent | null = { type: 'snapshot', data: emptySnapshot() };
   /** When each identity request arrived (ms). */
   public identityRequests: number[] = [];
   public authorizations: Array<string | null> = [];
@@ -68,7 +55,7 @@ export class FakeDaemon {
     this.server = null;
   }
 
-  public send(event: HubSseEvent): void {
+  public send(event: DaemonEvent): void {
     this.write(`data: ${JSON.stringify(event)}\n\n`);
   }
 

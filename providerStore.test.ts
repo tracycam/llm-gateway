@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { Protocol } from '../protocol/gatewayApi';
+import type { Protocol } from './shared/api';
 import { migrate, StoreRefusal } from './schema';
 import { ProviderStore } from './providerStore';
 

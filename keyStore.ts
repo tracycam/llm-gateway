@@ -3,10 +3,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { nextReset, periodStart, type ResetPeriod } from './period';
 import type {
   KeyCreateBody, KeyPatchBody, KeyRecord, ModelRecord, Price,
-} from '../protocol/gatewayApi';
+} from './shared/api';
 
-// `KeyRecord` and the create/patch bodies cross the management API; protocol/gatewayApi.ts
-// defines them once and this module re-exports them under their current names.
+// `KeyRecord` and the create/patch bodies cross the management API; shared/api.ts defines
+// them once and this module re-exports them under their current names.
 export type { KeyRecord };
 export type KeyInput = KeyCreateBody;
 export type KeyPatch = KeyPatchBody;

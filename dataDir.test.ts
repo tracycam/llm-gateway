@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { tempDir } from '../server/testing/fixtures';
+import { tempDir } from './testing/fixtures';
 import { migrateGatewayDataDir } from './dataDir';
 
 let dir: string;

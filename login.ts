@@ -2,7 +2,7 @@
 // background until the administrator confirms it, refuses it or the code expires. One
 // instance belongs to the app; the management routes start, report and cancel it, and
 // `close` stops every timer the gateway holds.
-import type { LoginStatus } from '../protocol/gatewayApi';
+import type { LoginStatus } from './shared/api';
 import type { Connector, DeviceCode, DeviceLoginPoll, LoginConnector } from './connectors/connector';
 import type { ProviderStore } from './providerStore';
 

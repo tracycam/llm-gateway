@@ -5,7 +5,7 @@ import type { Connector, ProviderAccess } from './connector';
 import type { ProviderModelInput } from '../providerStore';
 import { endpoint, fetchModels, optionalApiKey, positiveNumber } from './http';
 
-/** The version in current examples, documented in docs/gateway-connectors.md §2. */
+/** The version in current examples, documented in docs/connectors.md §2. */
 export const ANTHROPIC_VERSION = '2026-10-21';
 const MAX_PAGES = 20;
 const BASE = 'https://api.anthropic.com';

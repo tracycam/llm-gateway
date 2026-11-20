@@ -1,11 +1,11 @@
 import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import { StoreRefusal } from './schema';
-import type { Protocol, ProviderPatchBody, ProviderRecord, ProviderModel } from '../protocol/gatewayApi';
+import type { Protocol, ProviderPatchBody, ProviderRecord, ProviderModel } from './shared/api';
 import { parseJson } from './protocols/json';
 
-// `ProviderRecord` and `ProviderModel` cross the management API; protocol/gatewayApi.ts defines
-// them once.
+// `ProviderRecord` and `ProviderModel` cross the management API; shared/api.ts defines them
+// once.
 export type { ProviderRecord, ProviderModel };
 
 /** A model as its provider describes it. Null is "the provider did not say". */

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { bridgeRequest, bridgeResponse, bridgeStream, type Bridge } from './bridge';
-import type { Protocol } from './protocol';
-import { protocolModule } from './protocol';
+import { isObject } from './json';
+import { canServe, protocolModule, type Protocol } from './protocol';
 import { SseParser } from './sse';
 
 const protocols: Protocol[] = ['chat', 'messages'];
@@ -481,4 +481,410 @@ test('rule 19: no upstream reads until the consumer pulls', async () => {
     expect(pulls).toBe(expected);
   }
   expect((await reader.read()).done).toBe(true);
+});
+
+// ---------------------------------------------------------------------------------------
+// The Responses API, in both directions and through the Chat hub
+
+const every: Protocol[] = ['chat', 'messages', 'responses'];
+
+const responsesParts = [
+  ': keepalive\n\n',
+  event('response.created', {
+    response: { id: 'resp_1', model: 'r', status: 'in_progress', usage: null },
+  }),
+  event('response.in_progress', { response: { id: 'resp_1', status: 'in_progress' } }),
+  event('response.output_item.added', {
+    output_index: 0,
+    item: { id: 'msg_1', type: 'message', status: 'in_progress', role: 'assistant', content: [] },
+  }),
+  event('response.content_part.added', {
+    item_id: 'msg_1',
+    output_index: 0,
+    content_index: 0,
+    part: { type: 'output_text', text: '', annotations: [] },
+  }),
+  event('response.output_text.delta', { item_id: 'msg_1', output_index: 0, content_index: 0, delta: '你' }),
+  event('response.output_text.delta', { item_id: 'msg_1', output_index: 0, content_index: 0, delta: '好' }),
+  event('response.output_text.done', { item_id: 'msg_1', output_index: 0, content_index: 0, text: '你好' }),
+  event('response.content_part.done', {
+    item_id: 'msg_1',
+    output_index: 0,
+    content_index: 0,
+    part: { type: 'output_text', text: '你好', annotations: [] },
+  }),
+  event('response.output_item.done', {
+    output_index: 0,
+    item: {
+      id: 'msg_1',
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: '你好', annotations: [] }],
+    },
+  }),
+  event('response.completed', {
+    response: {
+      id: 'resp_1',
+      model: 'r',
+      status: 'completed',
+      output: [],
+      usage: { input_tokens: 3, output_tokens: 2 },
+    },
+  }),
+];
+
+const everyParts = (protocol: Protocol): string[] =>
+  protocol === 'chat' ? chatParts : protocol === 'messages' ? messagesParts : responsesParts;
+
+const upstreamError = (protocol: Protocol): string => protocol === 'responses'
+  ? 'event: error\ndata: {"type":"error","code":"server_error","message":"broken"}\n\n'
+  : errorFrame(protocol);
+
+/** The frames before and including the first content frame of each upstream transcript. */
+const contentPrefix = (protocol: Protocol): string[] =>
+  protocol === 'chat' ? chatParts.slice(0, 3)
+    : protocol === 'messages' ? messagesParts.slice(0, 3) : responsesParts.slice(0, 4);
+
+/** The frames before and including the first text delta of each upstream transcript. */
+const textPrefix = (protocol: Protocol): string[] =>
+  protocol === 'chat' ? chatParts.slice(0, 3)
+    : protocol === 'messages' ? messagesParts.slice(0, 4) : responsesParts.slice(0, 6);
+
+/** The text a client of `inbound` received in a translated stream. */
+function receivedText(text: string, inbound: Protocol): string {
+  const parts: string[] = [];
+  for (const frame of new SseParser().push(text)) {
+    if (frame.data === null || frame.data === '[DONE]') continue;
+    const value: unknown = JSON.parse(frame.data);
+    if (inbound === 'chat') {
+      if (!isObject(value) || !Array.isArray(value.choices)) continue;
+      for (const choice of value.choices) {
+        if (isObject(choice) && isObject(choice.delta) && typeof choice.delta.content === 'string') {
+          parts.push(choice.delta.content);
+        }
+      }
+    } else if (inbound === 'messages') {
+      if (isObject(value) && value.type === 'content_block_delta' && isObject(value.delta) &&
+          value.delta.type === 'text_delta' && typeof value.delta.text === 'string') {
+        parts.push(value.delta.text);
+      }
+    } else if (isObject(value) && value.type === 'response.output_text.delta' &&
+        typeof value.delta === 'string') {
+      parts.push(value.delta);
+    }
+  }
+  return parts.join('');
+}
+
+const terminalFrame = (protocol: Protocol): string =>
+  protocol === 'chat' ? 'data: [DONE]\n\n'
+    : protocol === 'messages' ? 'event: message_stop\n' : 'event: response.completed\n';
+
+const chatComplete = JSON.stringify({
+  id: 'chatcmpl-1',
+  object: 'chat.completion',
+  model: 'm',
+  choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 3, completion_tokens: 2 },
+});
+const messagesComplete = JSON.stringify({
+  id: 'msg_1',
+  type: 'message',
+  model: 'm',
+  content: [{ type: 'text', text: 'hi' }],
+  stop_reason: 'end_turn',
+  usage: { input_tokens: 3, output_tokens: 2 },
+});
+const responsesComplete = JSON.stringify({
+  id: 'resp_1',
+  object: 'response',
+  model: 'r',
+  status: 'completed',
+  output: [{
+    id: 'msg_1',
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text: 'hi', annotations: [] }],
+  }],
+  usage: { input_tokens: 3, output_tokens: 2 },
+});
+
+test('every protocol pair can be served', () => {
+  for (const inbound of every) {
+    for (const upstream of every) expect(canServe(inbound, upstream)).toBe(true);
+  }
+});
+
+test('responses same protocol preserves unknown fields', () => {
+  const result = bridgeRequest({ model: 'old', invented: 7, input: 'hi' }, bridge('responses', 'responses'));
+  expect('body' in result && result.body).toEqual({ model: 'chosen', invented: 7, input: 'hi' });
+});
+
+test('a Chat request becomes a Responses request', () => {
+  const request = {
+    messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'hi' }],
+    max_completion_tokens: 9,
+  };
+  const result = bridgeRequest(request, bridge('chat', 'responses'));
+  expect(result).toMatchObject({
+    body: {
+      model: 'chosen',
+      instructions: 's',
+      input: [{ type: 'message', role: 'user', content: 'hi' }],
+      max_output_tokens: 9,
+    },
+  });
+});
+
+test('a Messages request becomes a Responses request through Chat', () => {
+  const request = { system: 's', messages: [{ role: 'user', content: 'hi' }] };
+  const result = bridgeRequest(request, bridge('messages', 'responses'));
+  expect(result).toMatchObject({
+    body: {
+      model: 'chosen',
+      instructions: 's',
+      input: [{ type: 'message', role: 'user', content: 'hi' }],
+    },
+  });
+});
+
+test('a Responses request becomes a Chat request', () => {
+  const result = bridgeRequest({ instructions: 's', input: 'hi' }, bridge('responses', 'chat'));
+  expect(result).toMatchObject({
+    body: {
+      model: 'chosen',
+      messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'hi' }],
+    },
+  });
+});
+
+test('a Responses request becomes a Messages request through Chat', () => {
+  const result = bridgeRequest(
+    { input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] },
+    bridge('responses', 'messages'),
+  );
+  expect(result).toMatchObject({
+    body: {
+      model: 'chosen',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      max_tokens: 100,
+    },
+  });
+});
+
+test('streaming to a Responses client asks a Chat upstream for usage', () => {
+  const result = bridgeRequest({ input: 'hi', stream: true }, bridge('responses', 'chat'));
+  expect('body' in result && result.body.stream_options).toEqual({ include_usage: true });
+  expect('clientWantsUsage' in result && result.clientWantsUsage).toBe(false);
+});
+
+test('refusals survive every new route', () => {
+  expect(bridgeRequest({ input: 'hi', store: true }, bridge('responses', 'chat')))
+    .toHaveProperty('refused.param', 'store');
+  expect(bridgeRequest({ input: 'hi', previous_response_id: 'r' }, bridge('responses', 'messages')))
+    .toHaveProperty('refused.param', 'previous_response_id');
+  expect(bridgeRequest({ messages: [{ role: 'user', content: 'hi' }], stop: 'x' }, bridge('chat', 'responses')))
+    .toHaveProperty('refused.param', 'stop');
+  expect(bridgeRequest({ messages: [{ role: 'user', content: 'hi' }], stop_sequences: ['x'] },
+    bridge('messages', 'responses')))
+    .toHaveProperty('refused.param', 'stop');
+});
+
+test('a Responses same-protocol complete response is unchanged, with usage', () => {
+  const result = bridgeResponse(responsesComplete, bridge('responses', 'responses'));
+  expect(result.ok && result.body).toBe(responsesComplete);
+  expect(result.ok && result.usage).toEqual({ inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 });
+});
+
+test('a Responses upstream complete response becomes Chat', () => {
+  const result = bridgeResponse(responsesComplete, bridge('chat', 'responses'));
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.body)).toMatchObject({
+    id: 'resp_1',
+    object: 'chat.completion',
+    created: 123,
+    model: 'r',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
+  });
+  expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 });
+});
+
+test('a Responses upstream complete response becomes Messages through Chat', () => {
+  const result = bridgeResponse(responsesComplete, bridge('messages', 'responses'));
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.body)).toMatchObject({
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: 'hi' }],
+    stop_reason: 'end_turn',
+  });
+  expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 });
+});
+
+test('a Chat upstream complete response becomes Responses', () => {
+  const result = bridgeResponse(chatComplete, bridge('responses', 'chat'));
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.body)).toMatchObject({
+    id: 'resp_chatcmpl-1',
+    object: 'response',
+    created_at: 123,
+    status: 'completed',
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'hi', annotations: [] }],
+    }],
+    usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+  });
+  expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 });
+});
+
+test('a Messages upstream complete response becomes Responses through Chat', () => {
+  const result = bridgeResponse(messagesComplete, bridge('responses', 'messages'));
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(JSON.parse(result.body)).toMatchObject({
+    id: 'resp_msg_1',
+    object: 'response',
+    output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
+  });
+});
+
+for (const inbound of ['chat', 'messages'] as const) {
+  test(`a Responses body that is not a response is reported to the ${inbound} client`, () => {
+    expect(bridgeResponse('{}', bridge(inbound, 'responses'))).toEqual({
+      ok: false,
+      reason: 'The upstream response is not a response',
+    });
+  });
+}
+
+test('a Chat body that is not a chat completion is reported to the Messages client', () => {
+  expect(bridgeResponse('{}', bridge('messages', 'chat'))).toEqual({
+    ok: false,
+    reason: 'Invalid chat completion',
+  });
+});
+
+test('a Messages body that is not a message is reported to the Responses client', () => {
+  expect(bridgeResponse('{}', bridge('responses', 'messages'))).toEqual({
+    ok: false,
+    reason: 'The upstream response is not a message',
+  });
+});
+
+for (const inbound of ['chat', 'messages', 'responses'] as const) {
+  for (const upstream of ['chat', 'messages', 'responses'] as const) {
+    if (inbound !== 'responses' && upstream !== 'responses') continue;
+    for (const bytes of [false, true]) {
+      test(`responses bridge: normal stream ${inbound}/${upstream} bytes=${bytes}`, async () => {
+        const text = everyParts(upstream).join('');
+        const result = await bridgeStream(source(text, bytes), bridge(inbound, upstream), true);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const output = await collect(result.body);
+        if (inbound === upstream) {
+          expect(output).toBe(text);
+        } else {
+          expect(receivedText(output, inbound)).toBe('你好');
+          expect(output.includes(terminalFrame(inbound))).toBe(true);
+        }
+        expect(await result.finished).toEqual({
+          usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 },
+          error: null,
+          cancelled: false,
+        });
+      });
+    }
+  }
+}
+
+for (const inbound of ['chat', 'messages', 'responses'] as const) {
+  for (const upstream of ['chat', 'messages', 'responses'] as const) {
+    if (inbound !== 'responses' && upstream !== 'responses') continue;
+    test(`responses bridge: in-band error before content ${inbound}/${upstream}`, async () => {
+      const result = await bridgeStream(
+        source(upstreamError(upstream), true), bridge(inbound, upstream), true,
+      );
+      expect(result).toEqual({ ok: false, reason: 'broken' });
+    });
+    test(`responses bridge: in-band error after content ${inbound}/${upstream}`, async () => {
+      const text = contentPrefix(upstream).join('') + upstreamError(upstream);
+      const result = await bridgeStream(source(text, true), bridge(inbound, upstream), true);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const output = await collect(result.body);
+      expect(output).toContain('broken');
+      expect((await result.finished).error).toBe('broken');
+    });
+  }
+}
+
+test('a truncated Responses stream still finishes a Chat answer, and reports the cut', async () => {
+  const result = await bridgeStream(
+    source(textPrefix('responses').join(''), true), bridge('chat', 'responses'), true,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const output = await collect(result.body);
+  expect(receivedText(output, 'chat')).toBe('你');
+  expect(output.endsWith('data: [DONE]\n\n')).toBe(true);
+  expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+});
+
+test('a truncated Responses stream still finishes a Messages answer, and reports the cut', async () => {
+  const result = await bridgeStream(
+    source(textPrefix('responses').join(''), true), bridge('messages', 'responses'), true,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const output = await collect(result.body);
+  expect(receivedText(output, 'messages')).toBe('你');
+  expect(output.includes('event: message_stop\n')).toBe(true);
+  expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+});
+
+test('a truncated Chat stream still finishes a Responses answer, and reports the cut', async () => {
+  const result = await bridgeStream(
+    source(textPrefix('chat').join(''), true), bridge('responses', 'chat'), true,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const output = await collect(result.body);
+  expect(receivedText(output, 'responses')).toBe('你');
+  expect(output.includes('event: response.completed\n')).toBe(true);
+  expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+});
+
+test('a truncated Messages stream reaches a Responses client as an error', async () => {
+  const result = await bridgeStream(
+    source(contentPrefix('messages').join(''), true), bridge('responses', 'messages'), true,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const output = await collect(result.body);
+  expect(output).toContain('error');
+  expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+});
+
+test('a truncated Responses stream passes its error frame to a Responses client', async () => {
+  const result = await bridgeStream(
+    source(contentPrefix('responses').join(''), true), bridge('responses', 'responses'), true,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const output = await collect(result.body);
+  expect(output).toContain('Upstream stream ended before terminator');
+  expect((await result.finished).error).toBe('Upstream stream ended before terminator');
+});
+
+test('a Responses upstream that only sent preamble cannot open a Chat answer', async () => {
+  const preamble = responsesParts.slice(0, 3).join('');
+  const result = await bridgeStream(source(preamble, true), bridge('chat', 'responses'), true);
+  expect(result).toEqual({ ok: false, reason: 'Upstream stream ended before content' });
 });

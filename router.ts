@@ -17,6 +17,11 @@ export interface Candidate {
   order: number;
   /** Most requests the route takes at once; null = no cap. */
   limit: number | null;
+  /**
+   * The provider says this model speaks the client's protocol, so the request is passed through
+   * rather than translated. Among otherwise equal routes, a passthrough one is preferred.
+   */
+  native?: boolean;
 }
 
 /** What an upstream answer means for the request and for the route. */
@@ -66,15 +71,26 @@ export class Router {
 
   /**
    * The route to try next: of the routes not yet tried, not cooling down and below their
-   * limit, the one whose load would be lowest with this request on it.
+   * limit, the one whose load would be lowest with this request on it. A route whose provider
+   * says this model speaks the client's protocol is preferred over one that needs translation;
+   * among those, load decides, then creation order. With `sequential`, the first free route in
+   * candidate order wins instead: provider preferences and price sorts are applied by ordering
+   * the candidates.
    */
-  public pick(candidates: Candidate[], tried: ReadonlySet<string>, now: number): Pick {
+  public pick(
+    candidates: Candidate[], tried: ReadonlySet<string>, now: number, sequential = false,
+  ): Pick {
     const usable = candidates.filter((route) => !tried.has(route.id) && this.cooldownUntil(route.id, now) === null);
     const free = usable.filter((route) => route.limit === null || this.inflight(route.id) < route.limit);
     if (free.length === 0) return { none: usable.length === 0 ? 'unavailable' : 'all-busy' };
+    if (sequential) return { route: free[0] };
 
+    const native = free.filter((route) => route.native);
+    const pool = native.length > 0 ? native : free;
     const load = (route: Candidate) => (this.inflight(route.id) + 1) / route.weight;
-    return { route: free.reduce((best, route) => (load(route) - load(best) || route.order - best.order) < 0 ? route : best) };
+    return {
+      route: pool.reduce((best, route) => (load(route) - load(best) || route.order - best.order) < 0 ? route : best),
+    };
   }
 
   /** A request starts on the route. */

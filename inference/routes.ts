@@ -25,7 +25,8 @@ export function credentialUsable(provider: ProviderRecord, connector: Connector)
 
 /**
  * The routes of `model` a request may be sent on: the route is enabled, its provider exists
- * and is enabled, the provider's connector is known, and the provider's credential is usable.
+ * and is enabled, the provider's connector is known, the provider's credential is usable, and
+ * the connector says the upstream can serve the model now (a stopped daemon service cannot).
  * In the order the store returns them.
  */
 export function usableRoutes(
@@ -41,6 +42,7 @@ export function usableRoutes(
     const found = connector(provider.connector);
     if (!found) continue;
     if (!credentialUsable(provider, found)) continue;
+    if (found.routeAvailable && !found.routeAvailable(provider.id, route.upstreamModel)) continue;
     usable.push({ route, provider, connector: found });
   }
   return usable;

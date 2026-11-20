@@ -2,9 +2,10 @@
 import { isObject } from '../protocols/json';
 import type { JsonObject } from '../protocols/json';
 import type { Price } from '../pricing';
-import { UpstreamFailure } from './connector';
+import { protocolFor, UpstreamFailure } from './connector';
 import type { Connector, ProviderAccess } from './connector';
 import type { ProviderModelInput } from '../providerStore';
+import type { Protocol } from '../protocols/protocol';
 import { endpoint, fetchModels, optionalApiKey, positiveNumber, requiredApiKey } from './http';
 
 interface Vendor {
@@ -26,7 +27,7 @@ interface ModelRequest {
 
 const NO_PRICE: Price = { input: null, output: null, cacheRead: null };
 
-/** USD per token text to USD per 1M tokens; docs/gateway-connectors.md §4. */
+/** USD per token text to USD per 1M tokens; docs/connectors.md §4. */
 function usdPerTokenText(value: unknown): number | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const number = Number(value);
@@ -70,12 +71,17 @@ function connector(vendor: Vendor): Connector {
     name: vendor.name,
     defaultBaseUrl: vendor.defaultBaseUrl,
     credential: vendor.keyRequired ? 'api-key' : 'optional-api-key',
-    async target(provider, _upstreamModel, inbound) {
-      // A Responses client is passed through to the vendor's own Responses route; a Chat or
-      // Messages client goes to Chat Completions, where the vendor translates it.
-      const passThrough = inbound === 'responses' && vendor.responses;
-      const { url, headers } = request(provider, passThrough ? '/responses' : '/chat/completions');
-      return { url, headers, protocol: passThrough ? 'responses' : 'chat' };
+    async target(provider, upstreamModel, inbound) {
+      // The provider's own answer wins when it named the model's interfaces; otherwise a
+      // Responses client is passed through to the vendor's Responses route and a Chat or
+      // Messages client goes to Chat Completions, which the gateway translates to.
+      const protocols = provider.model(upstreamModel)?.protocols ?? null;
+      const fallback: Protocol = inbound === 'responses' && vendor.responses ? 'responses' : 'chat';
+      const protocol = vendor.responses ? protocolFor(protocols, inbound, fallback) : 'chat';
+      const { url, headers } = request(
+        provider, protocol === 'responses' ? '/responses' : '/chat/completions',
+      );
+      return { url, headers, protocol };
     },
     async models(provider) {
       const { url, headers, key } = request(provider, '/models');

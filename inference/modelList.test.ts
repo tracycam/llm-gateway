@@ -5,6 +5,7 @@ import { KeyStore } from '../keyStore';
 import { ModelStore, type ModelRecord } from '../modelStore';
 import type { Price } from '../pricing';
 import { isObject } from '../protocols/json';
+import { protocolModule, type Protocol } from '../protocols/protocol';
 import { ProviderStore, type ProviderRecord } from '../providerStore';
 import { migrate } from '../schema';
 import { UsageStore } from '../usageStore';
@@ -78,6 +79,36 @@ function listIds(body: unknown): unknown[] {
   return body.data.map((item) => isObject(item) ? item.id : null);
 }
 
+/** The OpenRouter-enriched OpenAI object a fixture model with one route produces. */
+function openaiShape(
+  id: string,
+  created: number,
+  ownedBy: string,
+  price: Price = priced,
+  contextLength: number | null = 100,
+) {
+  const usd = (perMillion: number | null): string | null => {
+    if (perMillion === null) return null;
+    const text = (perMillion / 1_000_000).toFixed(18);
+    return text === '0.000000000000000000' ? '0' : text.replace(/\.?0+$/, '');
+  };
+  return {
+    id,
+    object: 'model',
+    created,
+    owned_by: ownedBy,
+    name: id,
+    context_length: contextLength,
+    pricing: {
+      prompt: usd(price.input),
+      completion: usd(price.output),
+      input_cache_read: usd(price.cacheRead),
+    },
+    top_provider: { context_length: contextLength, max_completion_tokens: null },
+    supported_protocols: [],
+  };
+}
+
 test('listShape is OpenAI without an anthropic-version header', () => {
   expect(listShape(new Request('http://localhost/v1/models'))).toBe('openai');
 });
@@ -110,8 +141,8 @@ test('an enabled model with a usable route is listed', async () => {
     expect(await response.json()).toEqual({
       object: 'list',
       data: [
-        { id: 'zeta', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' },
-        { id: 'alpha', object: 'model', created: 1767225610, owned_by: 'aihub-gateway' },
+        openaiShape('zeta', 1767225600, 'provider'),
+        openaiShape('alpha', 1767225610, 'provider'),
       ],
     });
   } finally {
@@ -127,7 +158,7 @@ test('created is the creation time in whole seconds', async () => {
     const body = await modelListResponse(key, 'openai', f.deps).json();
     expect(body).toEqual({
       object: 'list',
-      data: [{ id: 'model', object: 'model', created: 1767225605, owned_by: 'aihub-gateway' }],
+      data: [openaiShape('model', 1767225605, 'provider')],
     });
   } finally {
     f.db.close();
@@ -167,7 +198,7 @@ test('a model forbidden to the key is not listed', async () => {
     const key = f.keys.create({ name: 'key', restricted: true, modelIds: [allowed.id] }, start);
     expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({
       object: 'list',
-      data: [{ id: 'allowed', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' }],
+      data: [openaiShape('allowed', 1767225600, 'provider')],
     });
   } finally {
     f.db.close();
@@ -193,7 +224,7 @@ test('a route price makes an unpriced model usable for a key with a cost limit',
     const key = f.keys.create({ name: 'key', costLimit: 5 }, start);
     expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({
       object: 'list',
-      data: [{ id: 'model', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' }],
+      data: [openaiShape('model', 1767225600, 'provider', unpriced)],
     });
   } finally {
     f.db.close();
@@ -234,7 +265,7 @@ test('a key over its cost limit still sees its models', async () => {
     expect(f.keys.overLimit(limited)).toBe(true);
     expect(await modelListResponse(limited, 'openai', f.deps).json()).toEqual({
       object: 'list',
-      data: [{ id: 'model', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' }],
+      data: [openaiShape('model', 1767225600, 'provider')],
     });
   } finally {
     f.db.close();
@@ -262,12 +293,7 @@ test('one model is the OpenAI object the list shows', async () => {
     const response = modelResponse(key, 'model', 'openai', f.deps);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({
-      id: 'model',
-      object: 'model',
-      created: 1767225600,
-      owned_by: 'aihub-gateway',
-    });
+    expect(await response.json()).toEqual(openaiShape('model', 1767225600, 'provider'));
   } finally {
     f.db.close();
   }
@@ -534,10 +560,94 @@ test('rule B2: the model list leaves out a model whose only route is rejected', 
     f.providers.rejectCredential(f.provider.id);
     expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({
       object: 'list',
-      data: [{ id: 'model', object: 'model', created: 1767225600, owned_by: 'aihub-gateway' }],
+      data: [openaiShape('model', 1767225600, 'other')],
     });
     f.providers.rejectCredential(other.id);
     expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({ object: 'list', data: [] });
+  } finally {
+    f.db.close();
+  }
+});
+
+/** Store what one provider discovered for a model, as a refresh would. */
+function discover(
+  f: Fixture, providerId: string, upstreamId: string,
+  protocols: Protocol[] | null, maxOutputTokens: number | null = null,
+): void {
+  f.providers.replaceModels(providerId, [{
+    upstreamId, contextLength: 4096, maxOutputTokens, price: priced, protocols,
+  }], start);
+}
+
+test('supported_protocols is the union over usable routes, and disagreeing limits are null', async () => {
+  const f = fixture();
+  try {
+    const model = f.models.create({ name: 'model', price: priced }, start);
+    f.models.addRoute(model.id, { providerId: f.provider.id, upstreamModel: 'up' });
+    discover(f, f.provider.id, 'up', ['chat'], 4096);
+    const other = f.providers.create({
+      name: 'other', connector: 'fake', baseUrl: null, credential: null, autoPublish: false,
+    }, start);
+    f.models.addRoute(model.id, { providerId: other.id, upstreamModel: 'up' });
+    discover(f, other.id, 'up', ['responses'], 8192);
+    const key = f.keys.create({ name: 'key' }, start);
+    expect(await modelListResponse(key, 'openai', f.deps).json()).toEqual({
+      object: 'list',
+      data: [{
+        ...openaiShape('model', 1767225600, 'gateway', priced, null),
+        top_provider: { context_length: null, max_completion_tokens: null },
+        supported_protocols: ['chat', 'responses'],
+      }],
+    });
+  } finally {
+    f.db.close();
+  }
+});
+
+test('one discovered provider model names max_completion_tokens and what it speaks', async () => {
+  const f = fixture();
+  try {
+    readyModel(f, 'model');
+    discover(f, f.provider.id, 'up', ['chat', 'responses'], 8192);
+    const key = f.keys.create({ name: 'key' }, start);
+    expect(await modelResponse(key, 'model', 'openai', f.deps).json()).toEqual({
+      ...openaiShape('model', 1767225600, 'provider'),
+      top_provider: { context_length: 100, max_completion_tokens: 8192 },
+      supported_protocols: ['chat', 'responses'],
+    });
+  } finally {
+    f.db.close();
+  }
+});
+
+test('pricing is a decimal USD-per-token string without an exponent, and zero stays zero', async () => {
+  const f = fixture();
+  try {
+    const price = { input: 0.5, output: 0, cacheRead: 2.5 };
+    f.models.create({ name: 'model', price, contextLength: 100 }, start);
+    f.models.addRoute(f.models.byName('model')!.id, { providerId: f.provider.id, upstreamModel: 'up' });
+    const key = f.keys.create({ name: 'key' }, start);
+    expect(await modelResponse(key, 'model', 'openai', f.deps).json()).toMatchObject({
+      pricing: {
+        prompt: '0.0000005',
+        completion: '0',
+        input_cache_read: '0.0000025',
+      },
+    });
+  } finally {
+    f.db.close();
+  }
+});
+
+test('an unknown model price is null in every pricing field', async () => {
+  const f = fixture();
+  try {
+    readyModel(f, 'model', 0, unpriced);
+    const key = f.keys.create({ name: 'key' }, start);
+    expect(await modelResponse(key, 'model', 'openai', f.deps).json()).toMatchObject({
+      pricing: { prompt: null, completion: null, input_cache_read: null },
+      top_provider: { context_length: 100, max_completion_tokens: null },
+    });
   } finally {
     f.db.close();
   }

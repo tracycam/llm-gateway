@@ -8,22 +8,21 @@ import { handleModelRoute } from './admin/models';
 import { handleProviderRoute } from './admin/providers';
 import { handleUsageRoute } from './admin/usage';
 import type { AdminDeps } from './admin/deps';
-import { Cluster } from './cluster';
 import type { NodeLinkOptions } from './nodeLink';
+import { createAihubConnector } from './connectors/aihub';
+import { AihubPool } from './connectors/aihubPool';
 import type { Connector } from './connectors/connector';
 import { CredentialRenewals } from './connectors/tokens';
 import { errorResponse, jsonResponse } from './http';
 import { attempt } from './inference/attempt';
 import { handleInference, MAX_QUEUE_WAIT_MS, type InferenceDeps } from './inference/handler';
 import { handleModel, handleModelList, type ModelListDeps } from './inference/modelList';
+import { handleGeneration, handleKeyInfo } from './inference/openRouter';
 import { KeyStore } from './keyStore';
 import { LoginSessions } from './login';
 import { ModelStore } from './modelStore';
 import { ModelSync } from './modelSync';
 import type { SyncWait } from './modelSync';
-import { openNodeEvents } from './nodeEvents';
-import { handleNodeRoute, NODES_PATH } from './nodeRoutes';
-import { NodeStore } from './nodeStore';
 import type { Protocol } from './protocols/protocol';
 import { protocolModule } from './protocols/protocol';
 import { ProviderStore } from './providerStore';
@@ -60,7 +59,7 @@ export interface GatewayAppOptions {
   connectors(): readonly Connector[];
   /** The administrator token; undefined when authentication is disabled. */
   adminToken: string | undefined;
-  /** Timeouts for the connections to registered daemons. */
+  /** Timeouts for the connections to AI-Hub daemons. */
   nodeTiming?: Pick<NodeLinkOptions, 'watchdogMs' | 'handshakeTimeoutMs' | 'retryMinMs' | 'retryMaxMs'>;
   /** The wait before each periodic model sync; defaults to a timer. Tests inject one. */
   syncWait?: SyncWait;
@@ -69,7 +68,7 @@ export interface GatewayAppOptions {
 /** A gateway that can answer requests without a network listener. */
 export interface GatewayApp {
   handle(req: Request): Promise<Response>;
-  /** Closes the login sessions, the node connections and the one database. */
+  /** Closes the login sessions, the daemon connections and the one database. */
   close(): Promise<void>;
 }
 
@@ -131,6 +130,12 @@ async function inferenceRoute(
     if (name === null) return withCors(notFoundV1(req));
     return withCors(handleModel(req, name, { ...models, now: deps.now }));
   }
+  if ((pathname === '/v1/key' || pathname === '/v1/auth/key') && req.method === 'GET') {
+    return withCors(handleKeyInfo(req, { keys: deps.keys, usage: deps.usage, now: deps.now }));
+  }
+  if (pathname === '/v1/generation' && req.method === 'GET') {
+    return withCors(handleGeneration(req, { keys: deps.keys, usage: deps.usage, now: deps.now }));
+  }
   return withCors(notFoundV1(req));
 }
 
@@ -151,45 +156,57 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
   const models = new ModelStore(options.db);
   const keys = new KeyStore(options.db);
   const usage = new UsageStore(options.db);
-  const nodes = new NodeStore(options.db);
-  const cluster = new Cluster(nodes.list(), options.nodeTiming);
   const router = new Router();
   const admission = new Admission();
   const renewals = new CredentialRenewals();
+  const aihubPool = new AihubPool({
+    providers, models, now: options.now, nodeTiming: options.nodeTiming,
+  });
+  // The app's own AI-Hub connector holds this app's pool: two gateways in one process never
+  // share a daemon link.
+  const boundAihub = createAihubConnector(aihubPool);
+  const connector = (id: string): Connector | null =>
+    id === 'aihub' ? boundAihub : options.connector(id);
+  const connectors = (): readonly Connector[] =>
+    options.connectors().map((item) => item.id === 'aihub' ? boundAihub : item);
   const sync = new ModelSync({
-    providers, models, renewals, connector: options.connector, now: options.now,
+    providers, models, renewals, connector, now: options.now,
     wait: options.syncWait,
   });
   const logins = new LoginSessions({
-    providers, connector: options.connector, fetch: options.fetch, now: options.now,
-    onGranted: (providerId) => sync.trigger(providerId),
+    providers, connector, fetch: options.fetch, now: options.now,
+    onGranted: (providerId) => {
+      aihubPool.reconcile(providerId);
+      sync.trigger(providerId);
+    },
   });
   let closed = false;
 
   // Every provider that can be asked is synced now, and again every six hours, without the
-  // console: its models and auto-published routes stay current while the gateway runs.
+  // console: its models and auto-published routes stay current while the gateway runs. The
+  // daemon links start first, so an AI-Hub provider's live list wins over a snapshot.
+  aihubPool.start();
   sync.start();
 
   const admin: AdminDeps = {
     providers, models, keys, usage, logins, sync, renewals,
-    connector: options.connector,
-    connectors: options.connectors,
+    connector,
+    connectors,
     now: options.now,
+    onProviderChanged: (providerId: string) => { aihubPool.reconcile(providerId); },
   };
   const inference: InferenceDeps = {
     keys, models, providers, usage, router, admission, renewals,
-    connector: options.connector,
+    connector,
     attempt,
     fetch: options.fetch,
     now: options.now,
     queueDeadline,
+    waitForCapacity: (signal: AbortSignal) => aihubPool.waitForCapacity(signal),
+    capacityChanged: () => aihubPool.notifyCapacity(),
   };
 
   async function managementRoute(req: Request, pathname: string): Promise<Response> {
-    if (pathname === '/api/gateway/events' && req.method === 'GET') return openNodeEvents(req, cluster);
-    if (pathname === NODES_PATH || pathname.startsWith(`${NODES_PATH}/`)) {
-      return handleNodeRoute(req, cluster, nodes);
-    }
     for (const handle of [handleProviderRoute, handleModelRoute, handleKeyRoute, handleUsageRoute]) {
       const response = await handle(req, admin);
       if (response) return response;
@@ -206,7 +223,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
 
     if (pathname.startsWith('/v1/')) {
       return inferenceRoute(req, pathname, inference, {
-        models, providers, keys, connector: options.connector,
+        models, providers, keys, connector,
       });
     }
 
@@ -216,7 +233,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     }
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      const asset = serveWebAsset(pathname, 'gateway.html', options.webDistDir);
+      const asset = serveWebAsset(pathname, 'index.html', options.webDistDir);
       if (asset) return asset;
     }
     return errorResponse('未找到', 404);
@@ -229,7 +246,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
       closed = true;
       logins.close();
       sync.close();
-      await cluster.close();
+      await aihubPool.close();
       options.db.close();
     },
   };

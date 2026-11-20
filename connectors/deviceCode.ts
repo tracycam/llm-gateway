@@ -4,7 +4,7 @@
 // Both ways these servers report a poll state are accepted: HTTP 400 with an `error` member
 // (the RFC, xAI) and HTTP 200 with the same member (GitHub). A network failure or a 5xx
 // rejects, because the code may still be confirmed: the login session keeps polling until the
-// code expires. Wire facts and their evidence: docs/gateway-connectors.md §7, §8 and §10.
+// code expires. Wire facts and their evidence: docs/connectors.md §7, §8 and §10.
 import { isObject, parseJson, type JsonObject } from '../protocols/json';
 import type { DeviceCode, DeviceLogin, DeviceLoginPoll } from './connector';
 

@@ -177,3 +177,56 @@ test('the lifetime input count of a key includes cached tokens', () => {
     db.close();
   }
 });
+
+test('record stores the request id and key, and generation reads them back', () => {
+  const { db, key, usage, entry } = setup();
+  try {
+    usage.record({ ...entry, requestId: 'gen-000000000000000000000001' }, new Date(2024, 0, 31, 12));
+    expect(usage.generation('gen-000000000000000000000001', key.id)).toEqual({
+      requestId: 'gen-000000000000000000000001',
+      modelName: 'model',
+      providerName: null,
+      upstreamModel: null,
+      protocol: 'openai',
+      status: 200,
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadTokens: 1,
+      cost: 2,
+      latencyMs: 50,
+      ttftMs: null,
+      timestamp: new Date(2024, 0, 31, 12).toISOString(),
+      error: null,
+    });
+    expect(usage.generation('gen-000000000000000000000002', key.id)).toBeNull();
+  } finally {
+    db.close();
+  }
+});
+
+test('generation is scoped to the key that made the request', () => {
+  const { db, keys, key, usage, entry } = setup();
+  try {
+    const other = keys.create({ name: 'other' }, new Date(2024, 0, 1));
+    usage.record({ ...entry, requestId: 'gen-000000000000000000000010' }, new Date(2024, 0, 31, 12));
+    expect(usage.generation('gen-000000000000000000000010', other.id)).toBeNull();
+    expect(usage.generation('gen-000000000000000000000010', key.id)?.modelName).toBe('model');
+  } finally {
+    db.close();
+  }
+});
+
+test('only the last 200 requests can be looked up', () => {
+  const { db, key, usage, entry } = setup();
+  try {
+    for (let i = 0; i < 201; i++) {
+      usage.record({ ...entry, requestId: `gen-${String(i).padStart(24, '0')}` },
+        new Date(2024, 0, 31, 12));
+    }
+    expect(usage.generation(`gen-${String(0).padStart(24, '0')}`, key.id)).toBeNull();
+    expect(usage.generation(`gen-${String(200).padStart(24, '0')}`, key.id))
+      .toMatchObject({ requestId: `gen-${String(200).padStart(24, '0')}` });
+  } finally {
+    db.close();
+  }
+});

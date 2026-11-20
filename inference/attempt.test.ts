@@ -590,21 +590,40 @@ test('Responses passthrough: a truncated stream gets an error frame in its own s
   } finally { s.server.stop(true); }
 });
 
-test('a Chat request is never sent to an upstream that speaks only Responses', async () => {
+test('a Chat request is translated onto an upstream that speaks only Responses', async () => {
   const s = stub(() => new Response(responsesBody));
   try {
     const req = input(s.server.url.href, 'chat', 'responses');
-    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocols: ['responses'] });
-    expect(s.requests).toHaveLength(0);
+    const result = await attempt(req);
+    if (result.kind !== 'complete') throw new Error(JSON.stringify(result));
+    const body = JSON.parse(result.body) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+    expect(body.choices[0]?.message.content).toBe('hi');
+    expect(result.usage).toEqual(responsesUsage);
+    const sent = JSON.parse(s.requests[0]!.body) as { model: string; input: unknown };
+    expect(sent.model).toBe('chosen');
+    expect(sent.input).toEqual([{ role: 'user', content: 'hello', type: 'message' }]);
   } finally { s.server.stop(true); }
 });
 
-test('a Responses request is never sent to an upstream that speaks only Chat', async () => {
+test('a Responses request is translated onto an upstream that speaks only Chat', async () => {
   const s = stub(() => new Response(complete('chat')));
   try {
     const req = input(s.server.url.href, 'responses', 'chat');
-    expect(await attempt(req)).toEqual({ kind: 'incompatible', protocols: ['chat'] });
-    expect(s.requests).toHaveLength(0);
+    req.body = { input: 'hello' };
+    const result = await attempt(req);
+    if (result.kind !== 'complete') throw new Error(JSON.stringify(result));
+    const body = JSON.parse(result.body) as {
+      object: string;
+      output: Array<{ content: Array<{ text: string }> }>;
+    };
+    expect(body.object).toBe('response');
+    expect(body.output[0]?.content[0]?.text).toBe('hi');
+    expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 2, cacheReadTokens: 0 });
+    const sent = JSON.parse(s.requests[0]!.body) as { model: string; messages: unknown };
+    expect(sent.model).toBe('chosen');
+    expect(sent.messages).toEqual([{ role: 'user', content: 'hello' }]);
   } finally { s.server.stop(true); }
 });
 

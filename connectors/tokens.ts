@@ -27,7 +27,7 @@ export function due(expiresAt: Date | null, now: Date, leadSeconds = 300): boole
 /**
  * Renewals in flight, one per provider. A connector whose refresh token rotates calls `fresh`
  * from `target`: the second of two concurrent callers waits for the first one's renewal instead
- * of spending a refresh token that is already spent (docs/gateway-connectors.md §10).
+ * of spending a refresh token that is already spent (docs/connectors.md §10).
  */
 export class CredentialRenewals {
   private readonly running = new Map<string, Promise<string>>();

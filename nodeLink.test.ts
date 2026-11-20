@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import net from 'node:net';
-import { HubSseEvent, ServiceInstance } from '../protocol/types';
-import { NodeLink, NodeLinkOptions, NodeLinkState } from './nodeLink';
+import { type DaemonEvent, type ServiceInstance } from './connectors/dgp';
+import { NodeLink, NodeLinkOptions, NodeLinkState, parseNodeIdentity } from './nodeLink';
 import { emptySnapshot, FakeDaemon } from './testing/fakeDaemon';
 
 const WATCHDOG_MS = 200;
@@ -11,7 +11,7 @@ const RETRY_MAX_MS = 80;
 let daemon: FakeDaemon;
 let link: NodeLink | null;
 let changes: NodeLinkState[];
-let events: HubSseEvent[];
+let events: DaemonEvent[];
 
 beforeEach(() => {
   daemon = new FakeDaemon();
@@ -55,9 +55,9 @@ const offline = () => until('offline', () => changes.some((state) => !state.onli
 const lastReason = () => changes.filter((state) => !state.online).at(-1)?.reason;
 
 const service = { id: 'svc-1', status: 'READY' } as unknown as ServiceInstance;
-const stateEvent: HubSseEvent = {
+const stateEvent: DaemonEvent = {
   type: 'state',
-  data: { cards: [], services: [service], apps: [], hardware: emptySnapshot().hardware, operations: [] },
+  data: { services: [service] },
 };
 
 describe('connecting', () => {
@@ -93,6 +93,46 @@ describe('connecting', () => {
     connect();
     await online();
     expect(daemon.authorizations).toEqual([null, null]);
+  });
+});
+
+describe('identity', () => {
+  test('optional worker range and capabilities are parsed, and absent ones stay absent', () => {
+    expect(parseNodeIdentity({
+      nodeId: 'n', hostname: 'h', version: '1', apiVersion: 1,
+    })).toEqual({ nodeId: 'n', hostname: 'h', version: '1', apiVersion: 1 });
+    expect(parseNodeIdentity({
+      nodeId: 'n', hostname: 'h', version: '1', apiVersion: 1,
+      workerPortRange: [18100, 18400], capabilities: { workerProtocols: true },
+    })).toEqual({
+      nodeId: 'n', hostname: 'h', version: '1', apiVersion: 1,
+      workerPortRange: [18100, 18400], capabilities: { workerProtocols: true },
+    });
+  });
+
+  test('a malformed optional field is not an identity', () => {
+    for (const extra of [
+      { workerPortRange: [18100] },
+      { workerPortRange: [18100, 18000] },
+      { workerPortRange: [0, 18400] },
+      { workerPortRange: [18100.5, 18400] },
+      { capabilities: { workerProtocols: 'yes' } },
+      { capabilities: {} },
+    ]) {
+      expect(() => parseNodeIdentity({
+        nodeId: 'n', hostname: 'h', version: '1', apiVersion: 1, ...extra,
+      })).toThrow('节点身份格式无法识别');
+    }
+  });
+
+  test('a null expected id is latched from the first handshake and enforced afterwards', async () => {
+    connect({ expectedNodeId: null });
+    await online();
+    daemon.opening = null;
+    daemon.identity = { ...daemon.identity, nodeId: 'node-b' };
+    daemon.closeStreams();
+    await until('the latched id refused', () =>
+      changes.some((state) => !state.online && state.reason === '节点号与登记时不符'));
   });
 });
 
@@ -286,24 +326,26 @@ describe('while online', () => {
   test('a character cut in the middle between two pieces is received intact', async () => {
     connect();
     await online();
-    const event: HubSseEvent = { type: 'log', data: { engineId: 'eng', line: '加载权重' } };
+    const event: DaemonEvent = { type: 'log', data: { engineId: 'eng', line: '加载权重' } };
     const bytes = new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
     const cut = bytes.length - 7;
     daemon.write(bytes.subarray(0, cut));
     await Bun.sleep(30);
     daemon.write(bytes.subarray(cut));
     await until('event', () => events.length === 1);
-    expect(link!.state.snapshot!.engineLogs).toEqual({ eng: ['加载权重'] });
+    expect(events).toEqual([event]);
+    expect(link!.state.snapshot!.services).toEqual([]);
   });
 
-  test('two events in one piece are both received, in order', async () => {
+test('two events in one piece are both received, in order', async () => {
     connect();
     await online();
-    const first: HubSseEvent = { type: 'log', data: { engineId: 'eng', line: '1' } };
-    const second: HubSseEvent = { type: 'log', data: { engineId: 'eng', line: '2' } };
+    const first: DaemonEvent = { type: 'log', data: { engineId: 'eng', line: '1' } };
+    const second: DaemonEvent = { type: 'log', data: { engineId: 'eng', line: '2' } };
     daemon.write(`data: ${JSON.stringify(first)}\n\ndata: ${JSON.stringify(second)}\n\n`);
     await until('events', () => events.length === 2);
-    expect(link!.state.snapshot!.engineLogs).toEqual({ eng: ['1', '2'] });
+    expect(events).toEqual([first, second]);
+    expect(link!.state.snapshot!.services).toEqual([]);
   });
 });
 
@@ -422,8 +464,8 @@ describe('stop', () => {
   });
 
   test('called while an event is handled, later events of the same piece are not passed on', async () => {
-    const first: HubSseEvent = { type: 'log', data: { engineId: 'eng', line: '1' } };
-    const second: HubSseEvent = { type: 'log', data: { engineId: 'eng', line: '2' } };
+    const first: DaemonEvent = { type: 'log', data: { engineId: 'eng', line: '1' } };
+    const second: DaemonEvent = { type: 'log', data: { engineId: 'eng', line: '2' } };
     let stopping: Promise<void> | undefined;
     connect({
       onEvent: (event) => {

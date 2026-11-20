@@ -1,6 +1,6 @@
 // Stub-backed tests for the OpenCode Zen and OpenCode Go connectors.
 import { afterEach, expect, test } from 'bun:test';
-import pkg from '../../package.json';
+import pkg from '../package.json';
 import type { Protocol } from '../protocols/protocol';
 import { attempt, type AttemptInput } from '../inference/attempt';
 import { anthropicCompatible } from './anthropic';
@@ -9,8 +9,8 @@ import type { Connector, ProviderAccess } from './connector';
 import { opencode, opencodeGo } from './opencode';
 
 const KEY = 'oc_sk_secret';
-// The user agent carries the version the repository declares, not a copy of it.
-const USER_AGENT = `aihub-gateway/${pkg.version}`;
+// The user agent carries the version this gateway declares, not a copy of it.
+const USER_AGENT = `llm-gateway/${pkg.version}`;
 
 interface Preset {
   connector: Connector;

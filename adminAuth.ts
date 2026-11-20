@@ -1,27 +1,33 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
-// The gateway's administrator authentication: one admin token (AIHUB_ADMIN_TOKEN), sent as a
-// bearer token or exchanged at login for a session cookie. There are no accounts.
+// The gateway's administrator authentication: one admin token (`ADMIN_TOKEN`, or the earlier
+// `AIHUB_ADMIN_TOKEN`), sent as a bearer token or exchanged at login for a session cookie. There
+// are no accounts.
 
 const LIFETIME = 7 * 24 * 60 * 60;
 // Cookies are not scoped by port: a daemon on the same host has its own cookie name, so the
 // two sessions do not overwrite each other.
 const COOKIE = 'aihub_gateway_session';
 
+/** The administrator token: `ADMIN_TOKEN`, or the name it had while it lived in a daemon. */
+export function adminToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.ADMIN_TOKEN ?? env.AIHUB_ADMIN_TOKEN;
+}
+
 export function validateTokenConfig(listen: string, token: string | undefined): void {
   const loopback = listen === 'localhost' || listen === '::1' || (isIP(listen) === 4 && listen.startsWith('127.'));
   if (token !== undefined && token.length < 16) {
-    throw new Error('AIHUB_ADMIN_TOKEN must be at least 16 characters');
+    throw new Error('ADMIN_TOKEN (or AIHUB_ADMIN_TOKEN) must be at least 16 characters');
   }
   if (!loopback && !token) {
-    throw new Error('AIHUB_ADMIN_TOKEN is required for non-loopback listeners');
+    throw new Error('ADMIN_TOKEN (or AIHUB_ADMIN_TOKEN) is required for non-loopback listeners');
   }
 }
 
-export function requireTokenConfig(listen: string): void {
+export function requireTokenConfig(listen: string, token: string | undefined): void {
   try {
-    validateTokenConfig(listen, process.env.AIHUB_ADMIN_TOKEN);
+    validateTokenConfig(listen, token);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -50,7 +56,7 @@ export function clearCookie(): string {
 
 export function isAuthorized(
   req: Request,
-  token = process.env.AIHUB_ADMIN_TOKEN,
+  token = adminToken(),
   now = Date.now()
 ): boolean {
   if (token === undefined) return true;
@@ -69,7 +75,7 @@ export function isAuthorized(
 export async function sessionRoute(
   req: Request,
   prefix: string,
-  token = process.env.AIHUB_ADMIN_TOKEN
+  token = adminToken()
 ): Promise<Response | null> {
   const pathname = new URL(req.url).pathname;
   if (pathname === `${prefix}/session` && req.method === 'GET') {

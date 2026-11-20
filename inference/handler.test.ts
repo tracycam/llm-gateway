@@ -8,6 +8,7 @@ import { KeyStore, type KeyInput } from '../keyStore';
 import { ModelStore } from '../modelStore';
 import type { Usage } from '../pricing';
 import type { Finished } from '../protocols/bridge';
+import { isObject } from '../protocols/json';
 import { protocolModule, type Protocol } from '../protocols/protocol';
 import { ProviderStore } from '../providerStore';
 import { Router } from '../router';
@@ -958,5 +959,259 @@ test('rule 6: a deadline that has already fired is 429 at once and never waits',
   expect(clock.arms).toHaveLength(1);
   expect(clock.last().cancels).toBe(1);
   release();
+  f.db.close();
+});
+
+// --- OpenRouter-compatible routing controls and headers ------------------------------------
+
+/** A second model on the fixture's provider, with its own scripted upstream route. */
+function otherModel(f: ReturnType<typeof fixture>, name: string, upstreamModel: string) {
+  const model = f.models.create({ name, price }, f.now());
+  return f.models.addRoute(model.id, { providerId: f.provider.id, upstreamModel });
+}
+
+test('every inference answer carries a gen- request id, and a served one names model and provider',
+  async () => {
+    const f = fixture();
+    f.script(f.routes[0]!, complete);
+    const { response } = await answer(f);
+    expect(response.headers.get('x-request-id')).toMatch(/^gen-[0-9a-f]{24}$/);
+    expect(response.headers.get('x-gateway-model')).toBe('model');
+    expect(response.headers.get('x-gateway-provider')).toBe('provider');
+    expect(f.usage.generation(response.headers.get('x-request-id')!, f.key.id)?.status).toBe(200);
+    f.db.close();
+  });
+
+test('a missing key still gets a request id, with no provider or model', async () => {
+  const f = fixture();
+  const response = await handleInference(
+    new Request('http://localhost/v1/chat/completions', { method: 'POST', body: '{}' }),
+    'chat', f.deps,
+  );
+  expect(response.status).toBe(401);
+  expect(response.headers.get('x-request-id')).toMatch(/^gen-[0-9a-f]{24}$/);
+  expect(response.headers.get('x-gateway-provider')).toBeNull();
+  f.db.close();
+});
+
+test('models and provider never reach the upstream', async () => {
+  const f = fixture();
+  f.script(f.routes[0]!, complete);
+  const { response } = await answer(f, f.request({
+    model: 'model', messages: [{ role: 'user', content: 'hi' }],
+    models: ['model'], provider: { only: ['provider'] },
+  }));
+  expect(response.status).toBe(200);
+  expect(f.calls[0]!.body).not.toHaveProperty('models');
+  expect(f.calls[0]!.body).not.toHaveProperty('provider');
+  f.db.close();
+});
+
+test('a model list falls back after the first candidate ends with a 503', async () => {
+  const f = fixture();
+  const first = otherModel(f, 'first model', 'first upstream');
+  f.script(first, { kind: 'failed', outcome: { kind: 'unavailable' }, status: 503, reason: 'busy' });
+  f.script(f.routes[0]!, complete);
+  const { response } = await answer(f, f.request({ model: 'first model', models: ['model'] }));
+  expect(response.status).toBe(200);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['first upstream', 'upstream-0']);
+  expect(f.usage.logs()).toEqual([expect.objectContaining({ modelName: 'model', status: 200 })]);
+  expect(response.headers.get('x-gateway-model')).toBe('model');
+  f.db.close();
+});
+
+test('a model list does not advance past an upstream 400', async () => {
+  const f = fixture();
+  const first = otherModel(f, 'first model', 'first upstream');
+  f.script(first, rejected);
+  f.script(f.routes[0]!, complete);
+  const { response } = await answer(f, f.request({ model: 'first model', models: ['model'] }));
+  expect(response.status).toBe(400);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['first upstream']);
+  f.db.close();
+});
+
+test('a model list does not advance once a stream has started', async () => {
+  const f = fixture();
+  const first = otherModel(f, 'first model', 'first upstream');
+  const pending = stream();
+  f.script(first, pending.result);
+  f.script(f.routes[0]!, complete);
+  const { response } = await answer(f, f.request({ model: 'first model', models: ['model'] }));
+  expect(response.status).toBe(200);
+  pending.finish({ usage: null, error: 'upstream cut the stream', cancelled: false });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['first upstream']);
+  f.db.close();
+});
+
+test('a model list advances past a candidate with no usable route', async () => {
+  const f = fixture();
+  const first = otherModel(f, 'first model', 'first upstream');
+  f.models.updateRoute(first.id, { enabled: false });
+  f.script(f.routes[0]!, complete);
+  const { response } = await answer(f, f.request({ model: 'first model', models: ['model'] }));
+  expect(response.status).toBe(200);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['upstream-0']);
+  f.db.close();
+});
+
+test('when every candidate is refused by the key, the first refusal is the answer', async () => {
+  const f = fixture({ key: { costLimit: 0 } });
+  otherModel(f, 'other model', 'other upstream');
+  const { response, text } = await answer(f, f.request({ model: 'model', models: ['other model'] }));
+  expect(response.status).toBe(429);
+  expect(text).toBe(errorBody('chat', 429, 'Key cost limit reached'));
+  expect(f.calls).toHaveLength(0);
+  f.db.close();
+});
+
+test('malformed models and provider controls are 400s naming the field', async () => {
+  const f = fixture();
+  for (const [body, expectedParam] of [
+    [{ model: 'model', models: [] }, 'models'],
+    [{ model: 'model', models: ['a', 'a'] }, 'models'],
+    [{ model: 'model', models: ['a', 'b', 'c', 'd', 'e', 'f'] }, 'models'],
+    [{ model: 'model', models: [1] }, 'models'],
+    [{ model: 'model', provider: [] }, 'provider'],
+    [{ model: 'model', provider: { sort: 'fast' } }, 'provider.sort'],
+    [{ model: 'model', provider: { allow_fallbacks: 'no' } }, 'provider.allow_fallbacks'],
+  ] as const) {
+    const { response, text } = await answer(f, f.request(body));
+    const error = JSON.parse(text);
+    const param = isObject(error) && isObject(error.error) ? error.error.param : null;
+    expect([response.status, param]).toEqual([400, expectedParam]);
+  }
+  expect(f.calls).toHaveLength(0);
+  f.db.close();
+});
+
+/** A second provider on the fixture connector, for provider preferences. */
+function otherProvider(f: ReturnType<typeof fixture>, name: string) {
+  return f.providers.create({
+    name, connector: 'fake', baseUrl: null, credential: 'secret', autoPublish: false,
+  }, f.now());
+}
+
+test("provider.only leaves only the named provider's routes", async () => {
+  const f = fixture();
+  const second = otherProvider(f, 'second');
+  const route = f.models.addRoute(f.model.id, { providerId: second.id, upstreamModel: 'second up' });
+  f.script(f.routes[0]!, complete);
+  f.script(route, complete);
+  const { response } = await answer(f, f.request({
+    model: 'model', provider: { only: ['second'] },
+  }));
+  expect(response.status).toBe(200);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['second up']);
+  expect(response.headers.get('x-gateway-provider')).toBe('second');
+  f.db.close();
+});
+
+test('provider.ignore removes a provider, and an empty result is no usable route', async () => {
+  const f = fixture();
+  f.script(f.routes[0]!, complete);
+  const { response: ignored } = await answer(f, f.request({
+    model: 'model', provider: { ignore: ['provider'] },
+  }));
+  expect(ignored.status).toBe(503);
+  expect(f.calls).toHaveLength(0);
+  f.db.close();
+});
+
+test('provider.order picks the listed provider first', async () => {
+  const f = fixture();
+  const second = otherProvider(f, 'second');
+  const route = f.models.addRoute(f.model.id, { providerId: second.id, upstreamModel: 'second up' });
+  f.script(f.routes[0]!, complete);
+  f.script(route, complete);
+  const { response } = await answer(f, f.request({
+    model: 'model', provider: { order: ['second'] },
+  }));
+  expect(response.status).toBe(200);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['second up']);
+  f.db.close();
+});
+
+test('provider.sort price picks the cheaper route and puts unknown prices last', async () => {
+  const f = fixture();
+  const second = otherProvider(f, 'second');
+  const route = f.models.addRoute(f.model.id, {
+    providerId: second.id, upstreamModel: 'second up', price: { input: 100, output: 100, cacheRead: null },
+  });
+  // The fixture model has a price, so the first route is cheaper than the override.
+  f.script(f.routes[0]!, complete);
+  f.script(route, complete);
+  const { response } = await answer(f, f.request({
+    model: 'model', provider: { sort: 'price' },
+  }));
+  expect(response.status).toBe(200);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['upstream-0']);
+  f.db.close();
+});
+
+test('provider.allow_fallbacks false tries exactly one route', async () => {
+  const f = fixture();
+  const second = otherProvider(f, 'second');
+  const route = f.models.addRoute(f.model.id, { providerId: second.id, upstreamModel: 'second up' });
+  f.script(f.routes[0]!, { ...failed, outcome: { kind: 'unavailable' }, status: 500, reason: 'down' });
+  f.script(route, complete);
+  const { response } = await answer(f, f.request({
+    model: 'model', provider: { allow_fallbacks: false },
+  }));
+  expect(response.status).toBe(502);
+  expect(f.calls.map((call) => call.upstreamModel)).toEqual(['upstream-0']);
+  f.db.close();
+});
+
+test('usage.include adds the cost to a Chat answer and keeps `usage` off the upstream', async () => {
+  const f = fixture();
+  f.script(f.routes[0]!, {
+    kind: 'complete',
+    body: JSON.stringify({
+      id: 'answer', object: 'chat.completion',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2 },
+    }),
+    usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 },
+  });
+  const { response, text } = await answer(f, f.request({
+    model: 'model', messages: [{ role: 'user', content: 'hi' }], usage: { include: true },
+  }));
+  expect(response.status).toBe(200);
+  expect(f.calls[0]!.body).not.toHaveProperty('usage');
+  expect(JSON.parse(text).usage).toEqual({ prompt_tokens: 10, completion_tokens: 2, cost: 14 / 1_000_000 });
+  f.db.close();
+});
+
+test('usage.include adds the cost to a Chat stream usage chunk', async () => {
+  const f = fixture();
+  const body = 'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n';
+  let finish!: (result: Finished) => void;
+  const finished = new Promise<Finished>((resolve) => { finish = resolve; });
+  f.script(f.routes[0]!, { kind: 'stream', body: new Response(body).body!, finished });
+  const { text } = await answer(f, f.request({
+    model: 'model', stream: true, messages: [{ role: 'user', content: 'hi' }],
+    usage: { include: true },
+  }));
+  finish({ usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }, error: null, cancelled: false });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  const frame = text.split('\n\n')[0]!;
+  expect(JSON.parse(frame.slice('data: '.length)).usage)
+    .toEqual({ prompt_tokens: 10, completion_tokens: 2, cost: 14 / 1_000_000 });
+  f.db.close();
+});
+
+test('a cost is null when the price is unknown', async () => {
+  const f = fixture({ priced: false });
+  f.script(f.routes[0]!, {
+    kind: 'complete',
+    body: JSON.stringify({ usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+    usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 },
+  });
+  const { text } = await answer(f, f.request({
+    model: 'model', messages: [{ role: 'user', content: 'hi' }], usage: { include: true },
+  }));
+  expect(JSON.parse(text).usage.cost).toBeNull();
   f.db.close();
 });

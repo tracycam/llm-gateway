@@ -8,7 +8,7 @@ import type {
   RouteCreateBody,
   RoutePatchBody,
   RouteResponse,
-} from '../../protocol/gatewayApi';
+} from '../shared/api';
 import { jsonResponse } from '../http';
 import type { AdminDeps } from './deps';
 import { dispatch, type AdminRoute } from './dispatch';

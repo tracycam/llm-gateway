@@ -6,17 +6,21 @@ import type { ProviderAccess } from './connector';
 /** Deadline for a model-list request. */
 export const MODEL_TIMEOUT_MS = 30_000;
 
-/** Read and validate an API key without exposing credential text in errors. */
-export function optionalApiKey(provider: ProviderAccess): string | null {
-  const stored = provider.credential;
-  if (stored === null) {
+/** Read an API key from a stored credential; null when there is none. */
+export function apiKeyOf(credential: string | null): string | null {
+  if (credential === null) {
     return null;
   }
-  const value = parseJson(stored);
+  const value = parseJson(credential);
   if (!isObject(value) || typeof value.apiKey !== 'string' || !value.apiKey.trim()) {
     throw new UpstreamFailure('Invalid API key credential', null);
   }
   return value.apiKey;
+}
+
+/** Read and validate an API key without exposing credential text in errors. */
+export function optionalApiKey(provider: ProviderAccess): string | null {
+  return apiKeyOf(provider.credential);
 }
 
 /** Read a required API key. */

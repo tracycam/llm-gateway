@@ -9,7 +9,7 @@ import { migrate } from './schema';
 import {
   LEGACY_KEY_ID, LEGACY_MODELLED, LEGACY_NODE, openVersion3Database, openVersion4Database,
   openVersion5Database, openVersion6Database, openVersion7Database, openVersion8Database,
-  writeLegacyDatabase,
+  openVersion9Database, openVersion10Database, writeLegacyDatabase,
 } from './testing/legacy';
 import { ModelStore } from './modelStore';
 import { ProviderStore } from './providerStore';
@@ -54,17 +54,17 @@ test('migration is idempotent', () => {
     const before = db.query('SELECT type, name, sql FROM sqlite_master ORDER BY name').all();
     migrate(db);
     expect(db.query('SELECT type, name, sql FROM sqlite_master ORDER BY name').all()).toEqual(before);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
 });
 
-test('migration refuses version 10', () => {
+test('migration refuses version 12', () => {
   const db = new Database(':memory:');
   try {
-    db.exec('PRAGMA user_version = 10');
-    expect(() => migrate(db)).toThrow('Unsupported gateway database version: 10');
+    db.exec('PRAGMA user_version = 12');
+    expect(() => migrate(db)).toThrow('Unsupported gateway database version: 12');
   } finally {
     db.close();
   }
@@ -143,7 +143,7 @@ test('version 0 remains retryable if WAL purge is blocked', () => {
       expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 0 });
       reader.exec('ROLLBACK');
       migrate(db);
-      expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+      expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
     } finally {
       reader.close();
       db.close();
@@ -240,7 +240,7 @@ test('version 4 drops every cache-write column', () => {
     for (const table of ['usage_daily', 'request_logs', 'models', 'routes', 'provider_models']) {
       expect(columnsOf(db, table).filter((name) => name.startsWith('cache_write'))).toEqual([]);
     }
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -308,11 +308,11 @@ test('version 5 renames the two protocol connector ids and leaves the rows alone
       ]);
     expect(db.query('SELECT id, provider_id, upstream_model FROM routes').all())
       .toEqual([{ id: 'r', provider_id: 'p-default', upstream_model: 'gpt' }]);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
     const renamed = db.query('SELECT id, connector FROM providers ORDER BY id').all();
     migrate(db);
     expect(db.query('SELECT id, connector FROM providers ORDER BY id').all()).toEqual(renamed);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -371,7 +371,7 @@ test('version 6 adds credential_rejected at 0 and keeps every provider row', () 
     ]);
     expect(db.query('SELECT id, model_id, provider_id, upstream_model FROM routes').all())
       .toEqual([{ id: 'r', model_id: 'm', provider_id: 'p-key', upstream_model: 'gpt' }]);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
     expect(columnsOf(db, 'providers')).toContain('credential_rejected');
   } finally {
     db.close();
@@ -387,7 +387,7 @@ test('version 6 migration run twice changes nothing', () => {
     migrate(db);
     expect(schemaOf(db)).toEqual(schema);
     expect(db.query('SELECT * FROM providers ORDER BY id').all()).toEqual(providers);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -430,7 +430,7 @@ test('version 7 adds protocols as null and keeps every provider model', () => {
       provider_id: 'p-key', upstream_id: 'gpt', context_length: 128000, max_output_tokens: 4096,
       input_price: 1, output_price: 2, cache_read_price: 0.5, protocols: null, fetched_at: 'now',
     });
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
     expect(columnsOf(db, 'provider_models')).toContain('protocols');
   } finally {
     db.close();
@@ -446,7 +446,7 @@ test('version 7 migration run twice changes nothing', () => {
     migrate(db);
     expect(schemaOf(db)).toEqual(schema);
     expect(db.query('SELECT * FROM provider_models').all()).toEqual(models);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -506,7 +506,7 @@ test('version 8 retires the xai connector and keeps every provider row', () => {
     }]);
     expect(db.query('SELECT id, model_id, provider_id, upstream_model FROM routes').all())
       .toEqual([{ id: 'r', model_id: 'm', provider_id: 'p-default', upstream_model: 'grok-4' }]);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -538,7 +538,7 @@ test('version 8 migration run twice changes nothing', () => {
     migrate(db);
     expect(schemaOf(db)).toEqual(schema);
     expect(db.query('SELECT * FROM providers ORDER BY id').all()).toEqual(providers);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -578,7 +578,7 @@ test('version 9 adds the model sync fields as NULL and keeps every provider row'
       enabled: 1, auto_publish: 1, created_at: 'now', credential_rejected: 0,
       models_refreshed_at: null, models_error: null,
     }]);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
     expect(columnsOf(db, 'providers')).toContain('models_refreshed_at');
     expect(columnsOf(db, 'providers')).toContain('models_error');
   } finally {
@@ -595,7 +595,7 @@ test('version 9 migration run twice changes nothing', () => {
     migrate(db);
     expect(schemaOf(db)).toEqual(schema);
     expect(db.query('SELECT * FROM providers ORDER BY id').all()).toEqual(providers);
-    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 9 });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     db.close();
   }
@@ -608,6 +608,152 @@ test('a fresh database has the schema a migrated empty version-8 database has', 
     migrate(fresh);
     migrate(migrated);
     expect(schemaOf(migrated)).toEqual(schemaOf(fresh));
+  } finally {
+    fresh.close();
+    migrated.close();
+  }
+});
+
+/** A version-9 database holding the node rows the version-10 migration must carry. */
+function version9WithNodes(): Database {
+  const db = openVersion9Database();
+  db.exec(`
+    INSERT INTO nodes (id, name, url, token, node_id, created_at) VALUES
+      ('node-a', 'lab one', 'http://127.0.0.1:4310/', 'node-token-a', 'daemon-a', '2024-01-01T00:00:00.000Z'),
+      ('node-b', 'lab two', 'http://127.0.0.1:4320', NULL, 'daemon-b', '2024-01-02T00:00:00.000Z');
+  `);
+  return db;
+}
+
+test('version 10 migrates every node into an aihub provider and keeps the nodes', () => {
+  const db = version9WithNodes();
+  try {
+    const nodes = db.query('SELECT * FROM nodes ORDER BY id').all();
+    migrate(db);
+    const providers = db.query(`SELECT id, name, connector, base_url, credential, enabled,
+      auto_publish, created_at FROM providers ORDER BY created_at, id`).all();
+    expect(providers).toEqual([
+      {
+        id: expect.stringMatching(/^prv-[0-9a-f]{8}$/), name: 'lab one', connector: 'aihub',
+        base_url: 'http://127.0.0.1:4310/', credential: '{"apiKey":"node-token-a"}',
+        enabled: 1, auto_publish: 1, created_at: '2024-01-01T00:00:00.000Z',
+      },
+      {
+        id: expect.stringMatching(/^prv-[0-9a-f]{8}$/), name: 'lab two', connector: 'aihub',
+        base_url: 'http://127.0.0.1:4320', credential: null,
+        enabled: 1, auto_publish: 1, created_at: '2024-01-02T00:00:00.000Z',
+      },
+    ]);
+    expect(db.query('SELECT * FROM nodes ORDER BY id').all()).toEqual(nodes);
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+  } finally {
+    db.close();
+  }
+});
+
+test('version 10 disambiguates a taken name and skips an address an aihub provider already has', () => {
+  const db = version9WithNodes();
+  try {
+    db.exec(`
+      INSERT INTO providers (id, name, connector, base_url, created_at) VALUES
+        ('p-existing', 'lab one', 'openai-compatible', NULL, '2023-01-01T00:00:00.000Z'),
+        ('p-daemon-b', 'already here', 'aihub', 'http://127.0.0.1:4320/', '2023-01-02T00:00:00.000Z');
+    `);
+    migrate(db);
+    const migrated = db.query(`SELECT id, name, connector, base_url FROM providers
+      WHERE connector = 'aihub' ORDER BY created_at, id`).all();
+    expect(migrated).toEqual([
+      { id: 'p-daemon-b', name: 'already here', connector: 'aihub', base_url: 'http://127.0.0.1:4320/' },
+      {
+        id: expect.stringMatching(/^prv-[0-9a-f]{8}$/), name: 'lab one (AI-Hub)',
+        connector: 'aihub', base_url: 'http://127.0.0.1:4310/',
+      },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test('version 10 migration run twice changes nothing', () => {
+  const db = version9WithNodes();
+  try {
+    migrate(db);
+    const providers = db.query('SELECT * FROM providers ORDER BY id').all();
+    migrate(db);
+    expect(db.query('SELECT * FROM providers ORDER BY id').all()).toEqual(providers);
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+  } finally {
+    db.close();
+  }
+});
+
+test('a fresh database has the schema a migrated empty version-9 database has', () => {
+  const fresh = new Database(':memory:');
+  const migrated = openVersion9Database();
+  try {
+    migrate(fresh);
+    migrate(migrated);
+    expect(schemaOf(migrated)).toEqual(schemaOf(fresh));
+    expect(migrated.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+  } finally {
+    fresh.close();
+    migrated.close();
+  }
+});
+
+
+/** A version-10 database holding a request log the version-11 migration must keep. */
+function version10WithLog(): Database {
+  const db = openVersion10Database();
+  db.exec(`
+    INSERT INTO request_logs (id, timestamp, protocol, key_name, model_name, provider_name,
+      upstream_model, status, input_tokens, output_tokens, cache_read_tokens, cost, ttft_ms,
+      latency_ms, error) VALUES
+      (1, '2026-11-01T00:00:00.000Z', 'chat', 'key', 'model', 'provider', 'upstream', 200,
+        10, 3, 2, 0.1, 4, 10, NULL);
+  `);
+  return db;
+}
+
+test('version 11 adds request_id and key_id, keeps the rows and indexes the id', () => {
+  const db = version10WithLog();
+  try {
+    migrate(db);
+    expect(columnsOf(db, 'request_logs')).toContain('request_id');
+    expect(columnsOf(db, 'request_logs')).toContain('key_id');
+    expect(db.query('SELECT request_id, key_id FROM request_logs').get())
+      .toEqual({ request_id: null, key_id: null });
+    expect(db.query(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`)
+      .get('request_logs_request_id')).toEqual({ name: 'request_logs_request_id' });
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+  } finally {
+    db.close();
+  }
+});
+
+test('version 11 migration run twice changes nothing', () => {
+  const db = version10WithLog();
+  try {
+    migrate(db);
+    const schema = schemaOf(db);
+    const rows = db.query('SELECT * FROM request_logs').all();
+    migrate(db);
+    expect(schemaOf(db)).toEqual(schema);
+    expect(db.query('SELECT * FROM request_logs').all()).toEqual(rows);
+    expect(db.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
+  } finally {
+    db.close();
+  }
+});
+
+test('a fresh database has the schema a migrated empty version-10 database has', () => {
+  const fresh = new Database(':memory:');
+  const migrated = openVersion10Database();
+  try {
+    migrate(fresh);
+    migrate(migrated);
+    expect(schemaOf(migrated)).toEqual(schemaOf(fresh));
+    expect(migrated.query('PRAGMA user_version').get()).toEqual({ user_version: 11 });
   } finally {
     fresh.close();
     migrated.close();

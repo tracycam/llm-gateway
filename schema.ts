@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 export class StoreRefusal extends Error {
   constructor(message: string, public readonly status = 409) {
@@ -27,6 +27,20 @@ interface LegacyKeyRow {
   completion_tokens: number;
   last_used_at: string | null;
   created_at: string;
+}
+interface LegacyNodeRow {
+  id: string;
+  name: string;
+  url: string;
+  token: string | null;
+  node_id: string;
+  created_at: string;
+}
+interface ProviderNameRow {
+  name: string;
+}
+interface ProviderBaseRow {
+  base_url: string | null;
 }
 
 const keysDDL = `CREATE TABLE api_keys (
@@ -166,7 +180,7 @@ PRAGMA user_version = 3;
 export function migrate(db: Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   const { user_version: version } = db.query<VersionRow, []>('PRAGMA user_version').get()!;
-  if (version > 9) throw new Error(`Unsupported gateway database version: ${version}`);
+  if (version > 11) throw new Error(`Unsupported gateway database version: ${version}`);
 
   // Version 1 replaces plaintext API tokens with hashes.
   if (version < 1) {
@@ -315,5 +329,68 @@ export function migrate(db: Database): void {
         PRAGMA user_version = 9;
       `);
     })();
+  }
+
+  // Version 10 turns every registered node into an AI-Hub daemon provider, so its daemon's
+  // ready services are discovered and routed as upstream models. Nodes remain, and so does
+  // everything a provider already had; a URL already reached by an AI-Hub provider is not
+  // added twice, and a name already taken is disambiguated.
+  if (version < 10) {
+    db.transaction(() => {
+      const nodes = db.query<LegacyNodeRow, []>(
+        'SELECT id, name, url, token, node_id, created_at FROM nodes ORDER BY created_at, id'
+      ).all();
+      const knownBases = new Set(
+        db.query<ProviderBaseRow, []>(
+          "SELECT base_url FROM providers WHERE connector = 'aihub'"
+        ).all().map((row) => (row.base_url ?? '').replace(/\/+$/, ''))
+      );
+      const names = new Set(
+        db.query<ProviderNameRow, []>('SELECT name FROM providers').all().map((row) => row.name)
+      );
+      const insert = db.query(`INSERT INTO providers
+        (id, name, connector, base_url, credential, enabled, auto_publish, created_at)
+        VALUES (?, ?, 'aihub', ?, ?, 1, 1, ?)`);
+      for (const node of nodes) {
+        const base = node.url.replace(/\/+$/, '');
+        if (knownBases.has(base)) continue;
+        let id: string;
+        do {
+          id = `prv-${randomBytes(4).toString('hex')}`;
+        } while (db.query<{ id: string }, [string]>(
+          'SELECT id FROM providers WHERE id = ?'
+        ).get(id) !== null);
+        const name = uniqueProviderName(node.name, names);
+        const credential = node.token === null ? null : JSON.stringify({ apiKey: node.token });
+        insert.run(id, name, node.url, credential, node.created_at);
+        knownBases.add(base);
+        names.add(name);
+      }
+      db.exec('PRAGMA user_version = 10');
+    })();
+  }
+
+  // Version 11 gives every logged inference request the id it was answered under and the key
+  // that made it, so one key can ask for its own generation without reading another key's log.
+  if (version < 11) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE request_logs ADD COLUMN request_id TEXT;
+        ALTER TABLE request_logs ADD COLUMN key_id TEXT;
+        CREATE INDEX request_logs_request_id ON request_logs (request_id);
+        PRAGMA user_version = 11;
+      `);
+    })();
+  }
+}
+
+/** `name`, or the first `name (AI-Hub)`, `name (AI-Hub 2)`, ... no provider holds yet. */
+function uniqueProviderName(name: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(name)) return name;
+  const base = `${name} (AI-Hub)`;
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base} ${suffix}`;
+    if (!taken.has(candidate)) return candidate;
   }
 }

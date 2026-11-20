@@ -201,7 +201,7 @@ function registryFixture(): { db: Database; deps: AdminDeps } {
   return { db, deps: { ...deps, connector: connectorById, connectors: () => CONNECTORS } };
 }
 
-test('GET connectors lists the seven connectors in administrator order', async () => {
+test('GET connectors lists the eight connectors in administrator order', async () => {
   const { deps, db } = registryFixture();
   try {
     const response = await handleProviderRoute(request('/connectors'), deps);
@@ -220,6 +220,7 @@ test('GET connectors lists the seven connectors in administrator order', async (
         defaultBaseUrl: 'https://api.githubcopilot.com', credential: 'login' },
       { id: 'openrouter', name: 'OpenRouter',
         defaultBaseUrl: 'https://openrouter.ai/api/v1', credential: 'api-key' },
+      { id: 'aihub', name: 'AI-Hub', defaultBaseUrl: null, credential: 'optional-api-key' },
     ] });
     expect(deps.providers.list()).toHaveLength(0);
   } finally {

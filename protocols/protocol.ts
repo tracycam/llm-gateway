@@ -1,14 +1,14 @@
 // What the gateway needs to know about an upstream wire protocol to pass a response on:
 // which frames carry content, where the usage is, and how an error looks.
-import type { Protocol } from '../../protocol/gatewayApi';
+import type { Protocol } from '../shared/api';
 import type { Usage } from '../pricing';
 import type { SseFrame } from './sse';
 import { chat } from './chat';
 import { messages } from './messages';
 import { responses } from './responses';
 
-// `Protocol` crosses the management API as `ProviderModel.protocols`;
-// protocol/gatewayApi.ts defines it once.
+// `Protocol` crosses the management API as `ProviderModel.protocols`; shared/api.ts defines
+// it once.
 export type { Protocol };
 /** What a frame of an upstream response stream is to the gateway. */
 export type FrameKind =
@@ -51,11 +51,9 @@ export function protocolModule(protocol: Protocol): ProtocolModule {
 }
 
 /**
- * Whether an upstream speaking `upstream` can answer a request written in `inbound`: the same
- * protocol, or the Chat/Messages pair the bridge translates. The Responses API has no
- * translator in either direction and is served by passthrough only.
+ * Whether an upstream speaking `upstream` can answer a request written in `inbound`: every pair
+ * is served, the same protocol directly and the rest through the bridge's translators.
  */
-export function canServe(inbound: Protocol, upstream: Protocol): boolean {
-  if (inbound === upstream) return true;
-  return inbound !== 'responses' && upstream !== 'responses';
+export function canServe(_inbound: Protocol, _upstream: Protocol): boolean {
+  return true;
 }

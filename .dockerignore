@@ -1,0 +1,10 @@
+# The build context is the gateway directory. What a local run left behind never enters it.
+node_modules
+web/node_modules
+web/dist
+data
+**/*.tsbuildinfo
+*.log
+*.db
+*.sqlite
+.DS_Store

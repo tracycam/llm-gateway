@@ -1,6 +1,6 @@
-import type { ResetPeriod } from '../protocol/gatewayApi';
+import type { ResetPeriod } from './shared/api';
 
-// `ResetPeriod` crosses the management API; protocol/gatewayApi.ts defines it once.
+// `ResetPeriod` crosses the management API; shared/api.ts defines it once.
 export type { ResetPeriod };
 
 export function periodStart(period: ResetPeriod, now: Date): Date | null {

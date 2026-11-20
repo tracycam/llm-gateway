@@ -1,8 +1,10 @@
-import { applyHubEvent } from '../protocol/hubEvent';
-import { HubSnapshot, HubSseEvent, NodeIdentity } from '../protocol/types';
-
-/** The daemon API version this gateway speaks. */
-export const DAEMON_API_VERSION = 1;
+import {
+  applyDaemonEvent,
+  DAEMON_API_VERSION,
+  type DaemonEvent,
+  type DaemonSnapshot,
+  type NodeIdentity,
+} from './connectors/dgp';
 
 export interface NodeLinkState {
   online: boolean;
@@ -10,7 +12,7 @@ export interface NodeLinkState {
   reason: string | null;
   identity: NodeIdentity | null;
   /** The daemon's state, moved forward by its events. Null whenever the node is not online. */
-  snapshot: HubSnapshot | null;
+  snapshot: DaemonSnapshot | null;
 }
 
 export interface NodeLinkOptions {
@@ -18,12 +20,16 @@ export interface NodeLinkOptions {
   url: string;
   /** The daemon's admin token; null for a daemon that has none. */
   token: string | null;
-  /** Node id recorded when the node was registered. A daemon that answers with another id is refused. */
-  expectedNodeId: string;
+  /**
+   * Node id recorded when the node was registered; a daemon that answers with another id is
+   * refused. Null for a provider whose identity is learned on the first handshake: that id is
+   * latched then, and every later connection must still report it.
+   */
+  expectedNodeId: string | null;
   /** Called on every change of `online` or `reason`. */
   onChange: (state: NodeLinkState) => void;
   /** Called for every daemon event received while online, after it was applied to the snapshot. */
-  onEvent: (event: HubSseEvent) => void;
+  onEvent: (event: DaemonEvent) => void;
   /** Without a byte from the daemon for this long, the connection is dropped. */
   watchdogMs?: number;
   handshakeTimeoutMs?: number;
@@ -37,8 +43,14 @@ const HANDSHAKE_TIMEOUT_MS = 5_000;
 const RETRY_MIN_MS = 1_000;
 const RETRY_MAX_MS = 15_000;
 
-const EVENT_TYPES = new Set(['snapshot', 'state', 'log', 'logs_cleared', 'app_log', 'app_logs_cleared']);
-const SNAPSHOT_LISTS = ['cards', 'services', 'models', 'engines', 'operations'] as const;
+const EVENT_TYPES: Record<string, true> = {
+  snapshot: true,
+  state: true,
+  log: true,
+  logs_cleared: true,
+  app_log: true,
+  app_logs_cleared: true,
+};
 
 /** Why one connection ended. */
 class Disconnected extends Error {}
@@ -60,31 +72,50 @@ export function parseNodeIdentity(value: unknown): NodeIdentity {
   if (value.apiVersion !== DAEMON_API_VERSION) {
     throw new Disconnected(`接口版本不兼容（节点为 ${value.apiVersion}，网关为 ${DAEMON_API_VERSION}）`);
   }
-  return {
+  const identity: NodeIdentity = {
     nodeId: value.nodeId,
     hostname: value.hostname,
     version: value.version,
     apiVersion: DAEMON_API_VERSION,
   };
+  if (value.workerPortRange !== undefined) {
+    const range = value.workerPortRange;
+    if (!Array.isArray(range) || range.length !== 2) throw new Disconnected('节点身份格式无法识别');
+    const [min, max] = range;
+    if (!isPort(min) || !isPort(max) || min > max) throw new Disconnected('节点身份格式无法识别');
+    identity.workerPortRange = [min, max];
+  }
+  if (value.capabilities !== undefined) {
+    const capabilities = value.capabilities;
+    if (!isRecord(capabilities) || typeof capabilities.workerProtocols !== 'boolean') {
+      throw new Disconnected('节点身份格式无法识别');
+    }
+    identity.capabilities = { workerProtocols: capabilities.workerProtocols };
+  }
+  return identity;
 }
 
-function parseEvent(text: string): HubSseEvent {
+/** An inclusive TCP port a worker may listen on. */
+function isPort(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65_535;
+}
+
+function parseEvent(text: string): DaemonEvent {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
     throw new Disconnected('事件无法解析');
   }
-  if (!isRecord(value) || typeof value.type !== 'string' || !EVENT_TYPES.has(value.type) || !isRecord(value.data)) {
+  if (!isRecord(value) || typeof value.type !== 'string' || !isRecord(value.data)) {
     throw new Disconnected('事件无法解析');
   }
-  if (value.type === 'snapshot') {
-    const data = value.data;
-    if (SNAPSHOT_LISTS.some((key) => !Array.isArray(data[key])) || !isRecord(data.hardware)) {
-      throw new Disconnected('事件无法解析');
-    }
+  if (EVENT_TYPES[value.type] !== true) throw new Disconnected('事件无法解析');
+  // Both carrier events must carry the service list: it is the only state the gateway mirrors.
+  if ((value.type === 'snapshot' || value.type === 'state') && !Array.isArray(value.data.services)) {
+    throw new Disconnected('事件无法解析');
   }
-  return value as unknown as HubSseEvent;
+  return value as unknown as DaemonEvent;
 }
 
 /** Fetches the daemon's identity; throws with the reason shown to the administrator. */
@@ -127,6 +158,8 @@ async function request(url: string, token: string | null, signal: AbortSignal): 
 export class NodeLink {
   private current: NodeLinkState = { online: false, reason: '正在连接', identity: null, snapshot: null };
   private stopped = false;
+  /** The id the first successful handshake reported, for an `expectedNodeId` of null. */
+  private latchedNodeId: string | null = null;
   private attempt: AbortController | null = null;
   private wakeRetry: (() => void) | null = null;
   private loop: Promise<void> | null = null;
@@ -197,7 +230,9 @@ export class NodeLink {
     let response: Response;
     try {
       identity = await fetchNodeIdentity(url, token, attempt.signal);
-      if (identity.nodeId !== expectedNodeId) throw new Disconnected('节点号与登记时不符');
+      const expected = expectedNodeId ?? this.latchedNodeId;
+      if (expected !== null && identity.nodeId !== expected) throw new Disconnected('节点号与登记时不符');
+      this.latchedNodeId ??= identity.nodeId;
       response = await request(`${url}/api/v1/events`, token, attempt.signal);
     } catch (err) {
       if (attempt.signal.aborted && !this.stopped) throw new Disconnected('连接失败：握手超时');
@@ -246,7 +281,7 @@ export class NodeLink {
     }
   }
 
-  private receive(event: HubSseEvent, identity: NodeIdentity, onOnline: () => void): void {
+  private receive(event: DaemonEvent, identity: NodeIdentity, onOnline: () => void): void {
     if (this.stopped) return;
     if (!this.current.online) {
       // The daemon opens every stream with its full state; the node is online from then on.
@@ -255,7 +290,7 @@ export class NodeLink {
       this.change({ online: true, reason: null, identity, snapshot: event.data });
       return;
     }
-    this.current = { ...this.current, snapshot: applyHubEvent(this.current.snapshot!, event) };
+    this.current = { ...this.current, snapshot: applyDaemonEvent(this.current.snapshot!, event) };
     this.options.onEvent(event);
   }
 

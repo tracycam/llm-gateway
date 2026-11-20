@@ -16,6 +16,7 @@ const metadata = [
   ['opencode-go', 'https://opencode.ai/inference/go', 'api-key'],
   ['copilot', 'https://api.githubcopilot.com', 'login'],
   ['openrouter', 'https://openrouter.ai/api/v1', 'api-key'],
+  ['aihub', null, 'optional-api-key'],
 ] as const;
 
 const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'api-key', 'cookie'];

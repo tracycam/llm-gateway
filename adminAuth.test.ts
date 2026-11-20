@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isAuthorized, issueCookie, sessionRoute, validateTokenConfig } from './adminAuth';
+import { adminToken, isAuthorized, issueCookie, sessionRoute, validateTokenConfig } from './adminAuth';
 
 const TOKEN = 'administrator-token-123456';
 const NOW = Date.parse('2026-11-18T00:00:00Z');
@@ -94,10 +94,16 @@ test('a path that is not a session route is not handled', async () => {
   expect(await call('GET', '/api/gateway/providers')).toBeNull();
 });
 
-test('a listener that is not loopback requires an admin token', () => {
-  expect(() => validateTokenConfig('0.0.0.0', undefined)).toThrow('required');
+test('a listener that is not loopback requires an admin token, and the reason names both names', () => {
+  expect(() => validateTokenConfig('0.0.0.0', undefined)).toThrow('ADMIN_TOKEN (or AIHUB_ADMIN_TOKEN) is required');
   expect(() => validateTokenConfig('192.168.1.5', undefined)).toThrow('required');
   expect(() => validateTokenConfig('0.0.0.0', TOKEN)).not.toThrow();
+});
+
+test('the administrator token is ADMIN_TOKEN, or the earlier AIHUB_ADMIN_TOKEN', () => {
+  expect(adminToken({ ADMIN_TOKEN: TOKEN, AIHUB_ADMIN_TOKEN: 'legacy-admin-token-123456' })).toBe(TOKEN);
+  expect(adminToken({ AIHUB_ADMIN_TOKEN: TOKEN })).toBe(TOKEN);
+  expect(adminToken({})).toBeUndefined();
 });
 
 test('a loopback listener needs no admin token', () => {

@@ -6,7 +6,7 @@ import type {
   UsageByKeyResponse,
   UsageByModelResponse,
   UsageByProviderResponse,
-} from '../../protocol/gatewayApi';
+} from '../shared/api';
 import { jsonResponse } from '../http';
 import type { DayRange } from '../usageStore';
 import type { AdminDeps } from './deps';

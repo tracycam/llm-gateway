@@ -2,11 +2,11 @@ import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import type {
   ModelCreateBody, ModelPatchBody, ModelRecord, Price, RouteCreateBody, RoutePatchBody, RouteRecord,
-} from '../protocol/gatewayApi';
+} from './shared/api';
 import { StoreRefusal } from './schema';
 
-// `ModelRecord`, `RouteRecord` and the bodies cross the management API; protocol/gatewayApi.ts
-// defines them once and this module re-exports them under their current names.
+// `ModelRecord`, `RouteRecord` and the bodies cross the management API; shared/api.ts defines
+// them once and this module re-exports them under their current names.
 export type { ModelRecord, RouteRecord };
 export type ModelInput = ModelCreateBody;
 export type ModelPatch = ModelPatchBody;

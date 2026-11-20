@@ -4,8 +4,8 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { freePort, stopDaemon, tempDir } from '../server/testing/fixtures';
-import { until } from '../server/testing/stubDaemon';
+import { Database } from 'bun:sqlite';
+import { freePort, stopProcess, tempDir, until } from './testing/fixtures';
 import { LEGACY_TOKEN, writeLegacyDatabase } from './testing/legacy';
 
 const ADMIN_TOKEN = 'gateway-admin-integration-0123456789';
@@ -34,8 +34,8 @@ function openaiStub(answer: string) {
       if (pathname === '/models') {
         return Response.json({
           object: 'list',
-          data: ['upstream-chat', 'upstream-reject', 'fail-500', 'dual-a', 'dual-b', 'backup-model',
-            'upstream-responses'].map((id) => ({ id, object: 'model' })),
+          data: ['upstream-chat', 'upstream-reject', 'fail-500', 'fail-503', 'dual-a', 'dual-b',
+            'backup-model', 'upstream-responses'].map((id) => ({ id, object: 'model' })),
         });
       }
       if (pathname === '/responses') {
@@ -48,6 +48,11 @@ function openaiStub(answer: string) {
       if (body?.model === 'fail-500') {
         return new Response('{"error":{"message":"upstream failed"}}', {
           status: 500, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (body?.model === 'fail-503') {
+        return new Response('{"error":{"message":"upstream unavailable"}}', {
+          status: 503, headers: { 'content-type': 'application/json' },
         });
       }
       if (body?.model === 'upstream-reject') {
@@ -177,15 +182,15 @@ const RESPONSES_STREAM = [
 
 function startGateway(directory: string, listenPort: number): RunningGateway {
   const state = { text: '' };
-  const child = spawn(process.execPath, ['run', 'gateway/main.ts'], {
-    cwd: path.resolve(import.meta.dir, '..'),
+  // The entry file is resolved from this test, not from the working directory: the tests run
+  // both from the repository root and from `gateway/`.
+  const child = spawn(process.execPath, ['run', path.join(import.meta.dir, 'main.ts')], {
+    cwd: import.meta.dir,
     env: {
       ...process.env,
-      AIHUB_GATEWAY_PORT: String(listenPort),
-      AIHUB_GATEWAY_DATA_DIR: directory,
-      AIHUB_ADMIN_TOKEN: ADMIN_TOKEN,
-      // A data directory of its own: the retired app directory must not be picked up here.
-      AIHUB_VOL1_PATH: path.join(directory, 'vol1'),
+      PORT: String(listenPort),
+      DATA_DIR: directory,
+      ADMIN_TOKEN: ADMIN_TOKEN,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -283,7 +288,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
-  if (gateway) await stopDaemon(gateway.child);
+  if (gateway) await stopProcess(gateway.child);
   for (const stub of [openai, backup, anthropic]) stub?.stop();
   if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
 }, 30_000);
@@ -511,7 +516,7 @@ test('9. a key below its cost limit is refused 429 on the next request; resettin
   }, 20_000);
 
 test('10. after a restart the key still works and the model is still listed', async () => {
-  await stopDaemon(gateway.child);
+  await stopProcess(gateway.child);
   gateway = startGateway(dataDir, port);
   await waitUp(base, gateway.child);
   const listed = await client('/v1/models');
@@ -523,7 +528,7 @@ test('10. after a restart the key still works and the model is still listed', as
 test('11. neither credential appears in a management response or in the gateway output', async () => {
   for (const pathname of [
     '/api/gateway/providers', '/api/gateway/models', '/api/gateway/keys',
-    '/api/gateway/usage?by=model', '/api/gateway/logs', '/api/gateway/nodes',
+    '/api/gateway/usage?by=model', '/api/gateway/logs',
   ]) {
     await admin(pathname);
   }
@@ -550,7 +555,7 @@ test('12. an existing version-2 database starts and its old key authenticates on
     expect(await response.json()).toMatchObject({ object: 'list', data: [] });
     expect(token).toBe(LEGACY_TOKEN);
   } finally {
-    await stopDaemon(legacy.child);
+    await stopProcess(legacy.child);
     fs.rmSync(legacyDir, { recursive: true, force: true });
   }
 }, 30_000);
@@ -586,13 +591,13 @@ test('13. a Responses client is passed through to an upstream that speaks Respon
   expect(row.outputTokens).toBe(6);
 }, 20_000);
 
-test('14. the real registry lists seven connectors and holds two login providers without a key', async () => {
+test('14. the real registry lists eight connectors and holds two login providers without a key', async () => {
   const listed = await adminJson<{
     connectors: Array<{ id: string; credential: string; defaultBaseUrl: string | null }>;
   }>('/api/gateway/connectors');
   expect(listed.connectors.map((connector) => connector.id)).toEqual([
     'openai-compatible', 'anthropic-compatible', 'grok', 'opencode', 'opencode-go', 'copilot',
-    'openrouter',
+    'openrouter', 'aihub',
   ]);
   expect(listed.connectors.filter((connector) => connector.credential === 'login')
     .map((connector) => [connector.id, connector.defaultBaseUrl])).toEqual([
@@ -614,4 +619,183 @@ test('14. the real registry lists seven connectors and holds two login providers
     expect(await adminJson(`/api/gateway/providers/${provider.id}/login`))
       .toEqual({ login: { state: 'none' } });
   }
+}, 20_000);
+
+interface OpenaiModelItem {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+  name: string;
+  context_length: number | null;
+  pricing: { prompt: string | null; completion: string | null; input_cache_read: string | null };
+  top_provider: { context_length: number | null; max_completion_tokens: number | null };
+  supported_protocols: string[];
+}
+
+test('15. /v1/models carries the OpenRouter fields from the stores', async () => {
+  const response = await client('/v1/models');
+  const body = await response.json() as { object: string; data: OpenaiModelItem[] };
+  const item = body.data.find((model) => model.id === 'upstream-chat');
+  expect(item).toMatchObject({
+    id: 'upstream-chat',
+    object: 'model',
+    name: 'upstream-chat',
+    context_length: null,
+    pricing: {
+      prompt: '0.0000015',
+      completion: '0.000003',
+      input_cache_read: null,
+    },
+    top_provider: { context_length: null, max_completion_tokens: null },
+    // The OpenAI-compatible providers did not say what this model speaks.
+    supported_protocols: [],
+  });
+  expect(Number.isInteger(item?.created)).toBe(true);
+  // The stub's auto-published models gave `upstream-chat` routes on several providers.
+  expect(item?.owned_by).toBe('gateway');
+
+  const single = await createModel('single route model');
+  await addRoute(single, chatProviderId, 'upstream-chat');
+  const one = await client('/v1/models/single%20route%20model');
+  expect(one.status).toBe(200);
+  const oneBody = await one.json() as OpenaiModelItem;
+  expect(oneBody.owned_by).toBe('chat upstream');
+}, 20_000);
+
+test('16. x-request-id round-trips through /v1/generation for the same key only', async () => {
+  const response = await client('/v1/chat/completions', post({
+    model: 'upstream-chat', messages: [{ role: 'user', content: 'hi' }],
+  }));
+  expect(response.status).toBe(200);
+  const requestId = response.headers.get('x-request-id');
+  expect(requestId).toMatch(/^gen-[0-9a-f]{24}$/);
+  expect(response.headers.get('x-gateway-model')).toBe('upstream-chat');
+  expect(response.headers.get('x-gateway-provider')).toBe('chat upstream');
+  await response.text();
+
+  const generation = await client(`/v1/generation?id=${requestId}`);
+  expect(generation.status).toBe(200);
+  const answer = await generation.json() as { data: Record<string, unknown> };
+  expect(answer.data).toMatchObject({
+    id: requestId,
+    model: 'upstream-chat',
+    provider_name: 'chat upstream',
+    upstream_model: 'upstream-chat',
+    protocol: 'chat',
+    status: 200,
+    tokens_prompt: 10,
+    tokens_completion: 5,
+    native_tokens_cached: 0,
+    total_cost: (10 * PRICE.input + 5 * PRICE.output) / 1_000_000,
+    ttft: null,
+    error: null,
+  });
+  expect(typeof answer.data.latency).toBe('number');
+
+  const missing = await client('/v1/generation');
+  expect(missing.status).toBe(400);
+  expect(await missing.json()).toMatchObject({ error: { param: 'id' } });
+
+  const unknown = await client('/v1/generation?id=gen-000000000000000000000000');
+  expect(unknown.status).toBe(404);
+  expect(await unknown.json()).toMatchObject({ error: { message: 'Generation not found' } });
+
+  const other = await adminJson<{ token: string }>('/api/gateway/keys', 'POST', { name: 'other key' });
+  const foreign = await client(`/v1/generation?id=${requestId}`, {}, other.token);
+  expect(foreign.status).toBe(404);
+}, 20_000);
+
+test('17. /v1/key and /v1/auth/key describe the presenting key', async () => {
+  const response = await client('/v1/key');
+  expect(response.status).toBe(200);
+  const answer = await response.json() as { data: Record<string, unknown> };
+  expect(answer.data).toMatchObject({
+    label: 'client key',
+    limit: null,
+    limit_remaining: null,
+    limit_reset: 'none',
+    max_concurrency: null,
+    expires_at: null,
+    is_free_tier: false,
+  });
+  expect(answer.data.usage).toBeGreaterThan(0);
+  expect(answer.data.usage_total).toBeGreaterThanOrEqual(answer.data.usage as number);
+
+  const alias = await client('/v1/auth/key');
+  expect(alias.status).toBe(200);
+  expect(await alias.json()).toEqual(answer);
+
+  expect((await client('/v1/key', {}, 'wrong-token')).status).toBe(401);
+  expect((await fetch(`${base}/v1/key`)).status).toBe(401);
+}, 20_000);
+
+test('18. a models list falls back after the first model ends in a 503', async () => {
+  const model = await createModel('fallback first');
+  await addRoute(model, chatProviderId, 'fail-503');
+  const response = await client('/v1/chat/completions', post({
+    model: 'fallback first',
+    models: ['upstream-chat'],
+    messages: [{ role: 'user', content: 'hi' }],
+  }));
+  expect(response.status).toBe(200);
+  const body = await response.json() as { choices: Array<{ message: { content: string } }> };
+  expect(body.choices[0]?.message.content).toBe('stub answer');
+  expect(response.headers.get('x-gateway-model')).toBe('upstream-chat');
+  const sent = openai.calls.filter((call) => call.body?.model === 'fail-503');
+  expect(sent.length).toBeGreaterThan(0);
+}, 20_000);
+
+test('19. provider.only restricts a request to the named provider', async () => {
+  const alpha = await createProvider('openai-compatible', openai.url, 'pref alpha');
+  const beta = await createProvider('openai-compatible', backup.url, 'pref beta');
+  const model = await createModel('preference model');
+  await addRoute(model, alpha, 'upstream-chat');
+  await addRoute(model, beta, 'backup-model');
+  const response = await client('/v1/chat/completions', post({
+    model: 'preference model',
+    provider: { only: ['pref beta'] },
+    messages: [{ role: 'user', content: 'hi' }],
+  }));
+  expect(response.status).toBe(200);
+  const body = await response.json() as { choices: Array<{ message: { content: string } }> };
+  expect(body.choices[0]?.message.content).toBe('backup answer');
+  expect(response.headers.get('x-gateway-provider')).toBe('pref beta');
+}, 20_000);
+
+test('20. a Chat client is served by a Responses-only upstream, stream and non-stream', async () => {
+  const providerId = await createProvider('openai-compatible', openai.url, 'responses only upstream');
+  await adminJson(`/api/gateway/providers/${providerId}/refresh`, 'POST');
+  const modelId = await createModel('responses only');
+  await addRoute(modelId, providerId, 'upstream-responses');
+  // The provider discovers this model but cannot say what it speaks; this is what a discovery
+  // that names only Responses writes. The connector then sends every client to /responses.
+  const db = new Database(path.join(dataDir, 'gateway.sqlite'));
+  try {
+    db.query(`UPDATE provider_models SET protocols = ? WHERE provider_id = ? AND upstream_id = ?`)
+      .run('["responses"]', providerId, 'upstream-responses');
+  } finally {
+    db.close();
+  }
+
+  const before = openai.calls.filter((call) => call.body?.model === 'upstream-responses'
+    && call.pathname === '/responses').length;
+  const complete = await client('/v1/chat/completions', post({
+    model: 'responses only', messages: [{ role: 'user', content: 'hi' }],
+  }));
+  expect(complete.status).toBe(200);
+  const body = await complete.json() as { choices: Array<{ message: { content: string } }> };
+  expect(body.choices[0]?.message.content).toBe('responses answer');
+
+  const stream = await client('/v1/chat/completions', post({
+    model: 'responses only', messages: [{ role: 'user', content: 'hi' }], stream: true,
+  }));
+  expect(stream.status).toBe(200);
+  const text = await stream.text();
+  expect(text).toContain('responses answer');
+  expect(text).toContain('[DONE]');
+
+  const sent = openai.calls.filter((call) => call.body?.model === 'upstream-responses'
+    && call.pathname === '/responses').slice(before);
+  expect(sent.map((call) => call.body?.stream === true)).toEqual([false, true]);
 }, 20_000);

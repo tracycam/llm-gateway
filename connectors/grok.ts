@@ -15,7 +15,7 @@
 //   internal/runtime/executor/{xai_executor.go, xai_executor_request.go, helps/xai_version.go}:
 //   a headless gateway doing the same, the pinned client version and the 1.0.13 / 426 floor.
 //
-// Wire facts and their evidence: docs/gateway-connectors.md §10.
+// Wire facts and their evidence: docs/connectors.md §10.
 import { isObject, parseJson, type JsonObject } from '../protocols/json';
 import type { Protocol } from '../protocols/protocol';
 import type { ProviderModelInput } from '../providerStore';

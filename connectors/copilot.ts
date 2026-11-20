@@ -1,7 +1,7 @@
 // GitHub Copilot: one provider the administrator signs in with GitHub's device-code flow, after
 // which the gateway serves the models of that Copilot subscription. The GitHub OAuth token is the
 // API credential itself: it is sent to the account's Copilot API and no Copilot session token is
-// minted (docs/gateway-connectors.md §7, re-verified in §10). Wire facts and their evidence: §7.
+// minted (docs/connectors.md §7, re-verified in §10). Wire facts and their evidence: §7.
 //
 // Ported from, all MIT, read 2026-11-18:
 // - anomalyco/opencode @ 007afb1b0c8a36dff93d7945909d4e976545ba95,

@@ -1,0 +1,19 @@
+{
+  "name": "llm-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LLM Gateway: an OpenRouter-like /v1 API, API keys, administrator login and Web console",
+  "scripts": {
+    "start": "bun run main.ts",
+    "dev": "bun --watch main.ts",
+    "dev:web": "cd web && bun run dev",
+    "build": "cd web && bun run build",
+    "check": "tsc --noEmit -p . && cd web && ./node_modules/.bin/tsc -b",
+    "test": "bun test ./*.test.ts ./admin ./connectors ./inference ./protocols",
+    "verify": "bun run check && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}

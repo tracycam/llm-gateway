@@ -29,6 +29,8 @@ export interface AttemptInput {
   body: unknown;
   /** The client's request headers. */
   clientHeaders: Headers;
+  /** A target already chosen by a concurrency lease, instead of asking the connector. */
+  target?: UpstreamTarget;
   /** Fires when the client goes away. */
   signal: AbortSignal;
   fetch: typeof fetch;
@@ -177,7 +179,7 @@ export async function attempt(input: AttemptInput): Promise<AttemptResult> {
   if (known?.protocols?.length === 0) return { kind: 'incompatible', protocols: [] };
   let target: UpstreamTarget;
   try {
-    target = await input.connector.target(input.provider, input.upstreamModel, input.inbound);
+    target = input.target ?? await input.connector.target(input.provider, input.upstreamModel, input.inbound);
   } catch (error) {
     // A login the authorization server will not renew fails this route until the provider is
     // signed in again; its message names no token.

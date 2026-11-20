@@ -10,14 +10,16 @@ import type {
   UsageByProviderRow,
   UsageSummary,
   UsageTotals,
-} from '../protocol/gatewayApi';
+} from './shared/api';
 
-// `UsageSummary` crosses the management API; protocol/gatewayApi.ts defines it once and this
-// module re-exports it under its current name.
+// `UsageSummary` crosses the management API; shared/api.ts defines it once and this module
+// re-exports it under its current name.
 export type { UsageSummary };
 
 export interface UsageEntry {
   protocol: string;
+  /** The request's `gen-` id; null for rows written before version 11 or by other callers. */
+  requestId?: string;
   key: { id: string; name: string };
   model: { id: string; name: string };
   provider: { id: string; name: string } | null;
@@ -27,6 +29,24 @@ export interface UsageEntry {
   cost: number | null;
   ttftMs: number | null;
   latencyMs: number;
+  error: string | null;
+}
+
+/** What GET /v1/generation answers for one request of one key. */
+export interface GenerationRow {
+  requestId: string;
+  modelName: string;
+  providerName: string | null;
+  upstreamModel: string | null;
+  protocol: string;
+  status: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cost: number | null;
+  latencyMs: number;
+  ttftMs: number | null;
+  timestamp: string;
   error: string | null;
 }
 export interface DayRange {
@@ -66,6 +86,23 @@ interface LogRow {
   cost: number | null;
   ttft_ms: number | null;
   latency_ms: number;
+  error: string | null;
+}
+
+interface GenerationDbRow {
+  request_id: string;
+  model_name: string;
+  provider_name: string | null;
+  upstream_model: string | null;
+  protocol: string;
+  status: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost: number | null;
+  latency_ms: number;
+  ttft_ms: number | null;
+  timestamp: string;
   error: string | null;
 }
 
@@ -133,11 +170,12 @@ export class UsageStore {
         .run(allInput, u?.outputTokens ?? 0, cost);
       this.db.query(`INSERT INTO request_logs (timestamp, protocol, key_name, model_name, provider_name,
         upstream_model, status, input_tokens, output_tokens, cache_read_tokens,
-        cost, ttft_ms, latency_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        cost, ttft_ms, latency_ms, error, request_id, key_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(now.toISOString(), entry.protocol, entry.key.name, entry.model.name, entry.provider?.name ?? null,
           entry.upstreamModel, entry.status, u?.inputTokens ?? null, u?.outputTokens ?? null,
           u?.cacheReadTokens ?? null, entry.cost, entry.ttftMs,
-          entry.latencyMs, entry.error);
+          entry.latencyMs, entry.error, entry.requestId ?? null, entry.key.id);
       this.db.exec('DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY id DESC LIMIT 200)');
     })();
   }
@@ -197,6 +235,35 @@ export class UsageStore {
 
   clearLogs(): void {
     this.db.exec('DELETE FROM request_logs');
+  }
+
+  /**
+   * The log row of one request of one key. `request_logs` keeps only the last 200 requests, so a
+   * row that has rotated out is indistinguishable from an unknown id: both answer null.
+   */
+  generation(requestId: string, keyId: string): GenerationRow | null {
+    const row = this.db.query<GenerationDbRow, [string, string]>(`SELECT request_id, model_name,
+      provider_name, upstream_model, protocol, status, input_tokens, output_tokens,
+      cache_read_tokens, cost, latency_ms, ttft_ms, timestamp, error
+      FROM request_logs WHERE request_id = ? AND key_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(requestId, keyId);
+    if (!row) return null;
+    return {
+      requestId: row.request_id,
+      modelName: row.model_name,
+      providerName: row.provider_name,
+      upstreamModel: row.upstream_model,
+      protocol: row.protocol,
+      status: row.status,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cost: row.cost,
+      latencyMs: row.latency_ms,
+      ttftMs: row.ttft_ms,
+      timestamp: row.timestamp,
+      error: row.error,
+    };
   }
 
   private summarize(

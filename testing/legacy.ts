@@ -95,6 +95,9 @@ export function openVersion4Database(): Database {
     ALTER TABLE providers DROP COLUMN models_refreshed_at;
     ALTER TABLE providers DROP COLUMN models_error;
     ALTER TABLE provider_models DROP COLUMN protocols;
+    DROP INDEX request_logs_request_id;
+    ALTER TABLE request_logs DROP COLUMN request_id;
+    ALTER TABLE request_logs DROP COLUMN key_id;
     PRAGMA user_version = 4;`);
   return db;
 }
@@ -132,6 +135,22 @@ export function openVersion7Database(): Database {
 export function openVersion8Database(): Database {
   const db = openVersion7Database();
   db.exec('PRAGMA user_version = 8');
+  return db;
+}
+
+/** An empty in-memory version-9 database: version 9 adds the model sync fields. */
+export function openVersion9Database(): Database {
+  const db = openVersion8Database();
+  db.exec(`ALTER TABLE providers ADD COLUMN models_refreshed_at TEXT;
+    ALTER TABLE providers ADD COLUMN models_error TEXT;
+    PRAGMA user_version = 9`);
+  return db;
+}
+
+/** An empty in-memory version-10 database: version 10 changes rows only, not the schema. */
+export function openVersion10Database(): Database {
+  const db = openVersion9Database();
+  db.exec('PRAGMA user_version = 10');
   return db;
 }
 

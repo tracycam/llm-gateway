@@ -429,7 +429,7 @@ test('anything else is the console asset for GET and HEAD only, and a missing co
   const f = setup();
   expect((await f.request('/providers')).status).toBe(404);
   fs.mkdirSync(f.webDistDir, { recursive: true });
-  fs.writeFileSync(path.join(f.webDistDir, 'gateway.html'), '<!doctype html>console');
+  fs.writeFileSync(path.join(f.webDistDir, 'index.html'), '<!doctype html>console');
   const response = await f.request('/providers');
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toContain('text/html');
@@ -515,20 +515,22 @@ test('closing the app closes the one database', async () => {
   expect(files().filter((name) => name.endsWith('-wal') || name.endsWith('-shm'))).toEqual([]);
 });
 
-test('closing the app ends the connection to a registered node', async () => {
+test('closing the app ends the connection to an AI-Hub daemon', async () => {
   const daemon = new FakeDaemon();
   daemon.start();
   try {
     const f = setup();
-    const registered = await authorized(f, '/api/gateway/nodes', post({ name: 'machine', url: daemon.url }));
-    expect(registered.status).toBe(201);
-    await until('the node to be online', () => daemon.openStreams === 1);
-    // Registration and the link's own handshake both asked for the identity.
+    const created = await authorized(f, '/api/gateway/providers', post({
+      name: 'daemon', connector: 'aihub', baseUrl: daemon.url,
+    }));
+    expect(created.status).toBe(201);
+    await until('the daemon stream to open', () => daemon.openStreams === 1);
+    // Creation and the link's own handshake both asked for the identity.
     const handshakes = daemon.identityRequests.length;
     await f.app.close();
     // The stub daemon sees its event-stream response cancelled, and the handshake does not run
     // again: NodeLink.stop() awaits the connection loop, so no retry can start after close().
-    await until('the node stream to end', () => daemon.openStreams === 0);
+    await until('the daemon stream to end', () => daemon.openStreams === 0);
     expect(daemon.identityRequests).toHaveLength(handshakes);
   } finally {
     await daemon.stop();

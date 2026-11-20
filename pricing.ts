@@ -1,6 +1,6 @@
-import type { Price } from '../protocol/gatewayApi';
+import type { Price } from './shared/api';
 
-// `Price` crosses the management API; protocol/gatewayApi.ts defines it once and this module
+// `Price` crosses the management API; shared/api.ts defines it once and this module
 // re-exports it under its current name.
 export type { Price };
 

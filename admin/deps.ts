@@ -23,4 +23,9 @@ export interface AdminDeps {
   connector(id: string): Connector | null;
   connectors(): readonly Connector[];
   now(): Date;
+  /**
+   * A provider was created, changed or deleted. A connector that keeps live state (an AI-Hub
+   * daemon link) reconciles it here; absent when no connector needs it.
+   */
+  onProviderChanged?(providerId: string): void;
 }
