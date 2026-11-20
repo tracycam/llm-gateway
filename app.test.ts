@@ -1,6 +1,7 @@
 // The gateway's HTTP surface, built in-process over a temporary database and a stub upstream:
 // one test per routing, authentication, CORS and error-shape criterion.
 import { afterEach, expect, test } from 'bun:test';
+import type { Database } from 'bun:sqlite';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -119,6 +120,7 @@ const connector: Connector = {
 
 interface Fixture {
   dir: string;
+  db: Database;
   app: GatewayApp;
   webDistDir: string;
   key: string;
@@ -158,7 +160,7 @@ function setup(options: SetupOptions = {}): Fixture {
   models.addRoute(model.id, { providerId: provider.id, upstreamModel: 'upstream-model' });
   const key = keys.create({ name: 'client key' }, NOW).token;
   return {
-    dir, app, webDistDir, key, modelId: model.id, calls,
+    dir, db, app, webDistDir, key, modelId: model.id, calls,
     request: (pathname, init) => app.handle(new Request(`http://gateway${pathname}`, init)),
   };
 }
@@ -506,13 +508,19 @@ test('the production queue deadline aborts its signal when the timer fires', asy
   expect(outcome.cleared).toEqual([outcome.timer]);
 });
 
-test('closing the app closes the one database', async () => {
+test('closing the app closes the one database, with everything written kept', async () => {
   const f = setup();
-  const files = () => fs.readdirSync(f.dir);
-  expect(files()).toContain('gateway.sqlite-wal');
   await f.app.close();
   await f.app.close();
-  expect(files().filter((name) => name.endsWith('-wal') || name.endsWith('-shm'))).toEqual([]);
+  // Whether SQLite removes the -wal and -shm files on close is a build option (Linux's does,
+  // macOS's system SQLite keeps them), so closure is checked on the handle itself.
+  expect(() => f.db.query('SELECT 1').get()).toThrow();
+  const reopened = openGatewayDatabase(f.dir);
+  try {
+    expect(reopened.query('SELECT COUNT(*) AS n FROM api_keys').get()).toEqual({ n: 1 });
+  } finally {
+    reopened.close();
+  }
 });
 
 test('closing the app ends the connection to an AI-Hub daemon', async () => {
