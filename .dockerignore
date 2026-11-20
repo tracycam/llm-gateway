@@ -3,6 +3,8 @@ node_modules
 web/node_modules
 web/dist
 data
+release
+.github
 **/*.tsbuildinfo
 *.log
 *.db

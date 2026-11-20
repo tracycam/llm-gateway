@@ -29,7 +29,7 @@ import { ProviderStore } from './providerStore';
 import { Router } from './router';
 import { migrate } from './schema';
 import { UsageStore } from './usageStore';
-import { serveWebAsset } from './webAssets';
+import { diskWebAssets, serveWebAsset, type WebAssets } from './webAssets';
 
 /**
  * Bun's idle timeout, in seconds, for the gateway's server. Zero disables it: the gateway holds
@@ -47,8 +47,10 @@ const CORS_HEADERS: Record<string, string> = {
 export interface GatewayAppOptions {
   /** The one open database; `migrate` brings it to the current version here. */
   db: Database;
-  /** Directory of the built console. */
+  /** Directory of the built console, served when `webAssets` is not given. */
   webDistDir: string;
+  /** The console's files when they come from somewhere other than `webDistDir` (a compiled binary). */
+  webAssets?: WebAssets;
   /** Outgoing HTTP, for provider calls. */
   fetch: typeof fetch;
   /** The clock used for keys, periods and accounting. */
@@ -169,6 +171,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     id === 'aihub' ? boundAihub : options.connector(id);
   const connectors = (): readonly Connector[] =>
     options.connectors().map((item) => item.id === 'aihub' ? boundAihub : item);
+  const assets = options.webAssets ?? diskWebAssets(options.webDistDir);
   const sync = new ModelSync({
     providers, models, renewals, connector, now: options.now,
     wait: options.syncWait,
@@ -233,7 +236,7 @@ export function createApp(options: GatewayAppOptions): GatewayApp {
     }
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      const asset = serveWebAsset(pathname, 'index.html', options.webDistDir);
+      const asset = serveWebAsset(pathname, 'index.html', assets);
       if (asset) return asset;
     }
     return errorResponse('未找到', 404);

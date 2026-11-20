@@ -23,6 +23,7 @@ async function config(env: Record<string, string>): Promise<Record<string, unkno
 test('a gateway on its own needs no configuration', async () => {
   const values = await config({});
   expect(values).toEqual({
+    isStandaloneBinary: false,
     PORT: 8000,
     LISTEN: '127.0.0.1',
     DATA_DIR: path.join(gatewayDir, 'data'),
@@ -37,6 +38,7 @@ test('the neutral names are read', async () => {
     PORT: '9000', LISTEN: '::1', ADMIN_TOKEN: 'administrator-token-123456',
     DATA_DIR: '/custom/data', WEB_DIST_DIR: '/custom/web',
   })).toEqual({
+    isStandaloneBinary: false,
     PORT: 9000, LISTEN: '::1', ADMIN_TOKEN: 'administrator-token-123456',
     DATA_DIR: '/custom/data', WEB_DIST_DIR: '/custom/web', LEGACY_DATA_DIR: null,
   });
@@ -48,6 +50,7 @@ test('the names the gateway had inside a daemon are still read', async () => {
     AIHUB_ADMIN_TOKEN: 'legacy-administrator-123456',
     AIHUB_GATEWAY_DATA_DIR: '/legacy/data', AIHUB_WEB_DIST_DIR: '/legacy/web',
   })).toEqual({
+    isStandaloneBinary: false,
     PORT: 9001, LISTEN: 'localhost', ADMIN_TOKEN: 'legacy-administrator-123456',
     DATA_DIR: '/legacy/data', WEB_DIST_DIR: '/legacy/web', LEGACY_DATA_DIR: null,
   });
@@ -68,6 +71,7 @@ test('the neutral name wins when both are set', async () => {
 
 test("a daemon volume places the data inside it and names the retired directory", async () => {
   expect(await config({ AIHUB_VOL1_PATH: '/custom/vol' })).toEqual({
+    isStandaloneBinary: false,
     PORT: 8000,
     LISTEN: '127.0.0.1',
     DATA_DIR: '/custom/vol/gateway',
